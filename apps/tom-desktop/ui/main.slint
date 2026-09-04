@@ -1,0 +1,2040 @@
+// Tom's visual language is intentionally quiet: one work surface, low-contrast
+// boundaries, and color reserved for intent (lavender) or confirmed progress (green).
+
+global Theme {
+    out property <color> canvas: #0d0f14;
+    out property <color> ink: #11141a;
+    out property <color> graphite: #161a21;
+    out property <color> graphite-raised: #1a1f27;
+    out property <color> inset: #0b0d12;
+
+    out property <color> paper: #e8e8e4;
+    out property <color> text-secondary: #a8abb3;
+    out property <color> text-tertiary: #737985;
+    out property <color> text-muted: #4e5561;
+
+    out property <color> border-soft: #252a33;
+    out property <color> border: #303641;
+    out property <color> border-focus: #777293;
+
+    out property <color> lavender: #aaa4c8;
+    out property <color> lavender-soft: #2a2837;
+    out property <color> lavender-hover: #bab4d5;
+    out property <color> process: #79a88b;
+    out property <color> process-soft: #1c2b24;
+    out property <color> warning: #b9a16f;
+}
+
+export struct MemoryRow {
+    title: string,
+    preview: string,
+    meta: string,
+}
+
+export struct RoutineRow {
+    title: string,
+    explanation: string,
+    action: string,
+}
+
+component Hairline inherits Rectangle {
+    height: 1px;
+    background: Theme.border-soft;
+}
+
+component AppMark inherits Rectangle {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: Theme.paper;
+
+    Text {
+        text: "T";
+        color: Theme.canvas;
+        font-family: "Segoe UI Variable Display";
+        font-size: 17px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component OrbVisual inherits Rectangle {
+    in property <string> state: "idle";
+    background: transparent;
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        image-fit: contain;
+        source: root.state == "listening" ? @image-url("../assets/orb-states/listening.png")
+            : root.state == "thinking" ? @image-url("../assets/orb-states/thinking.png")
+            : root.state == "working" ? @image-url("../assets/orb-states/working.png")
+            : root.state == "success" ? @image-url("../assets/orb-states/success.png")
+            : root.state == "warning" ? @image-url("../assets/orb-states/warning.png")
+            : root.state == "error" ? @image-url("../assets/orb-states/error.png")
+            : root.state == "sleeping" ? @image-url("../assets/orb-states/sleeping.png")
+            : root.state == "curious" ? @image-url("../assets/orb-states/curious.png")
+            : @image-url("../assets/orb-states/idle.png");
+    }
+}
+
+component OnboardingChoice inherits Rectangle {
+    in property <string> choice-id;
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> selected: false;
+    callback chosen(string);
+
+    height: 76px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: root.selected ? Theme.lavender : Theme.border-soft;
+    background: onboarding-choice-touch.has-hover ? Theme.graphite-raised : Theme.graphite;
+
+    Rectangle {
+        x: 14px;
+        y: (parent.height - 18px) / 2;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        border-width: 1px;
+        border-color: root.selected ? Theme.lavender : Theme.border;
+        background: root.selected ? Theme.lavender-soft : Theme.inset;
+
+        Rectangle {
+            x: 5px;
+            y: 5px;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.selected ? Theme.lavender : transparent;
+        }
+    }
+
+    Text {
+        x: 44px;
+        y: 13px;
+        width: parent.width - 58px;
+        height: 20px;
+        text: root.label;
+        color: root.selected ? Theme.paper : Theme.text-secondary;
+        font-size: 12px;
+        font-weight: 650;
+    }
+
+    Text {
+        x: 44px;
+        y: 36px;
+        width: parent.width - 58px;
+        height: 28px;
+        text: root.detail;
+        color: Theme.text-tertiary;
+        font-size: 9px;
+        wrap: word-wrap;
+    }
+
+    onboarding-choice-touch := TouchArea {
+        accessible-role: radio-button;
+        accessible-label: root.label;
+        clicked => { root.chosen(root.choice-id); }
+    }
+}
+
+component NavItem inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <bool> selected: false;
+    callback activated();
+
+    height: 48px;
+    border-radius: 8px;
+    background: selected ? Theme.graphite-raised : (nav-touch.has-hover ? Theme.graphite : transparent);
+
+    Rectangle {
+        x: 0px;
+        y: 12px;
+        width: 2px;
+        height: 24px;
+        border-radius: 1px;
+        background: root.selected ? Theme.lavender : transparent;
+    }
+
+    Text {
+        x: 18px;
+        y: 8px;
+        width: 28px;
+        height: 18px;
+        text: root.glyph;
+        color: root.selected ? Theme.paper : Theme.text-tertiary;
+        font-family: "Segoe UI Symbol";
+        font-size: 15px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 8px;
+        y: 30px;
+        width: parent.width - 16px;
+        height: 12px;
+        text: root.label;
+        color: root.selected ? Theme.text-secondary : Theme.text-muted;
+        font-size: 9px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    nav-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
+        clicked => { root.activated(); }
+    }
+}
+
+component QuietButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> compact: false;
+    callback clicked();
+
+    min-width: compact ? 92px : 116px;
+    height: compact ? 32px : 38px;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: primary ? Theme.lavender : Theme.border;
+    background: primary
+        ? (button-touch.has-hover ? Theme.lavender-hover : Theme.lavender)
+        : (button-touch.has-hover ? Theme.graphite-raised : Theme.graphite);
+
+    Text {
+        text: root.label;
+        color: root.primary ? Theme.canvas : Theme.text-secondary;
+        font-size: root.compact ? 11px : 12px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    button-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
+        clicked => { root.clicked(); }
+    }
+}
+
+component QuietInput inherits Rectangle {
+    in-out property <string> value;
+    in property <string> placeholder;
+    in property <bool> multiline: false;
+    in property <bool> secret: false;
+    forward-focus: editor;
+
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: editor.has-focus ? Theme.border-focus : Theme.border-soft;
+    background: Theme.inset;
+    clip: true;
+
+    if root.value == "" : Text {
+        x: 14px;
+        y: root.multiline ? 12px : 0px;
+        width: parent.width - 28px;
+        height: root.multiline ? 20px : parent.height;
+        text: root.placeholder;
+        color: Theme.text-muted;
+        font-size: 12px;
+        vertical-alignment: root.multiline ? top : center;
+    }
+
+    editor := TextInput {
+        x: 14px;
+        y: root.multiline ? 10px : 0px;
+        width: parent.width - 28px;
+        height: root.multiline ? parent.height - 20px : parent.height;
+        text <=> root.value;
+        color: Theme.paper;
+        font-family: "Segoe UI Variable Text";
+        font-size: 12px;
+        font-weight: 400;
+        single-line: !root.multiline;
+        input-type: root.secret ? password : text;
+        wrap: root.multiline ? word-wrap : no-wrap;
+        vertical-alignment: root.multiline ? top : center;
+        selection-foreground-color: Theme.canvas;
+        selection-background-color: Theme.lavender;
+        accessible-label: root.placeholder;
+    }
+}
+
+component ProviderOption inherits Rectangle {
+    in property <string> provider-id;
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> selected: false;
+    callback chosen(string);
+
+    height: 54px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.selected ? Theme.lavender : Theme.border-soft;
+    background: provider-touch.has-hover ? Theme.graphite-raised : Theme.canvas;
+
+    Text {
+        x: 12px;
+        y: 8px;
+        width: parent.width - 24px;
+        height: 18px;
+        text: root.label;
+        color: root.selected ? Theme.paper : Theme.text-secondary;
+        font-size: 11px;
+        font-weight: 650;
+    }
+
+    Text {
+        x: 12px;
+        y: 28px;
+        width: parent.width - 24px;
+        height: 14px;
+        text: root.detail;
+        color: Theme.text-muted;
+        font-size: 9px;
+        overflow: elide;
+    }
+
+    provider-touch := TouchArea {
+        accessible-role: radio-button;
+        accessible-label: root.label;
+        clicked => { root.chosen(root.provider-id); }
+    }
+}
+
+component SectionLabel inherits Text {
+    in property <string> label;
+    text: label.to-uppercase();
+    color: Theme.text-tertiary;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    vertical-alignment: center;
+}
+
+component MemoryItem inherits Rectangle {
+    in property <MemoryRow> memory;
+
+    height: 76px;
+    border-radius: 8px;
+    background: memory-touch.has-hover ? Theme.graphite-raised : transparent;
+
+    Rectangle {
+        x: 0px;
+        y: 13px;
+        width: 3px;
+        height: 36px;
+        border-radius: 2px;
+        background: Theme.border;
+    }
+
+    Text {
+        x: 16px;
+        y: 9px;
+        width: parent.width - 28px;
+        height: 19px;
+        text: root.memory.title;
+        color: Theme.paper;
+        font-size: 12px;
+        font-weight: 600;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 16px;
+        y: 30px;
+        width: parent.width - 28px;
+        height: 17px;
+        text: root.memory.preview;
+        color: Theme.text-secondary;
+        font-size: 11px;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 16px;
+        y: 51px;
+        width: parent.width - 28px;
+        height: 13px;
+        text: root.memory.meta;
+        color: Theme.text-muted;
+        font-size: 9px;
+        font-weight: 500;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    memory-touch := TouchArea {
+        accessible-role: list-item;
+        accessible-label: root.memory.title;
+    }
+}
+
+component PulseStep inherits Rectangle {
+    in property <string> stage;
+    in property <string> title;
+    in property <string> detail;
+    in property <string> time;
+    in property <color> tone: Theme.text-tertiary;
+    in property <bool> last: false;
+
+    height: 92px;
+    background: transparent;
+
+    if !root.last : Rectangle {
+        x: 9px;
+        y: 24px;
+        width: 1px;
+        height: parent.height - 4px;
+        background: Theme.border;
+    }
+
+    Rectangle {
+        x: 5px;
+        y: 12px;
+        width: 9px;
+        height: 9px;
+        border-radius: 5px;
+        border-width: 2px;
+        border-color: root.tone;
+        background: Theme.ink;
+    }
+
+    Text {
+        x: 30px;
+        y: 4px;
+        width: parent.width - 92px;
+        height: 16px;
+        text: root.stage.to-uppercase();
+        color: root.tone;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: parent.width - 54px;
+        y: 4px;
+        width: 54px;
+        height: 16px;
+        text: root.time;
+        color: Theme.text-muted;
+        font-size: 9px;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 30px;
+        y: 24px;
+        width: parent.width - 30px;
+        height: 18px;
+        text: root.title;
+        color: Theme.paper;
+        font-size: 12px;
+        font-weight: 600;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 30px;
+        y: 46px;
+        width: parent.width - 30px;
+        height: 34px;
+        text: root.detail;
+        color: Theme.text-tertiary;
+        font-size: 10px;
+        wrap: word-wrap;
+    }
+}
+
+component RoutineItem inherits Rectangle {
+    in property <RoutineRow> routine;
+    in property <int> row-index;
+    callback accept(int);
+    callback dismiss(int);
+
+    height: 154px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.border-soft;
+    background: Theme.graphite;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 3px;
+        height: parent.height;
+        border-radius: 2px;
+        background: Theme.process;
+    }
+
+    Text {
+        x: 18px;
+        y: 14px;
+        width: parent.width - 36px;
+        height: 19px;
+        text: root.routine.title;
+        color: Theme.paper;
+        font-size: 12px;
+        font-weight: 650;
+        overflow: elide;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 18px;
+        y: 39px;
+        width: parent.width - 36px;
+        height: 34px;
+        text: root.routine.explanation;
+        color: Theme.text-tertiary;
+        font-size: 10px;
+        wrap: word-wrap;
+    }
+
+    Rectangle {
+        x: 18px;
+        y: 82px;
+        width: parent.width - 36px;
+        height: 24px;
+        border-radius: 5px;
+        background: Theme.inset;
+
+        Text {
+            x: 8px;
+            width: parent.width - 16px;
+            text: root.routine.action;
+            color: Theme.text-secondary;
+            font-family: "Cascadia Mono";
+            font-size: 9px;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+    }
+
+    QuietButton {
+        x: 18px;
+        y: 114px;
+        width: 94px;
+        label: "Aprobar";
+        primary: true;
+        compact: true;
+        clicked => { root.accept(root.row-index); }
+    }
+
+    QuietButton {
+        x: 120px;
+        y: 114px;
+        width: 90px;
+        label: "Ahora no";
+        compact: true;
+        clicked => { root.dismiss(root.row-index); }
+    }
+}
+
+export component MainWindow inherits Window {
+    in-out property <string> assistant-name: "Tom";
+    in-out property <string> status-text: "Local · atento";
+    in-out property <int> note-count: 0;
+    in-out property <[MemoryRow]> memory-rows: [
+        { title: "Decisión de arquitectura", preview: "Mantener la memoria local y cifrada por defecto.", meta: "hoy · proyecto Tom" },
+        { title: "Próximo paso", preview: "Conectar el flujo de onboarding con el perfil profesional.", meta: "hace 2 h · pendiente" },
+    ];
+    in-out property <[RoutineRow]> routine-rows: [
+        { title: "Preparar tu regreso al proyecto", explanation: "Sueles abrir el editor y las notas del proyecto juntos al comenzar.", action: "Abrir workspace + mostrar última memoria" },
+    ];
+    in-out property <bool> onboarding-visible: true;
+    in-out property <bool> settings-visible: false;
+    in-out property <string> ai-provider: "disabled";
+    in-out property <string> local-endpoint: "";
+    in-out property <string> local-model-path: "";
+    in-out property <bool> has-api-key: false;
+    in-out property <string> orb-state: "idle";
+    in-out property <string> active-section: "today";
+    in-out property <bool> today-visible: true;
+    in-out property <bool> memory-visible: false;
+    in-out property <bool> routines-visible: false;
+    in-out property <string> selected-profession: "developer";
+    in-out property <string> selected-assistance: "balanced";
+
+    callback save-note(string, string);
+    callback persona-selected(string);
+    callback onboarding-completed(string, string, string);
+    callback enter-orb-mode();
+    callback navigate-to(string);
+    callback accept-routine(int);
+    callback dismiss-routine(int);
+    callback save-ai-settings(string, string, string, string);
+    callback clear-api-key();
+
+    property <string> note-title: "";
+    property <string> note-body: "";
+    property <string> selected-persona: assistant-name == "Tomy" ? "friendly" : "professional";
+    property <string> api-key-input: "";
+    property <int> onboarding-step: 0;
+    property <string> selected-ai-setup: "later";
+
+    title: assistant-name + " — asistente personal";
+    preferred-width: 1120px;
+    preferred-height: 680px;
+    min-width: 1000px;
+    min-height: 640px;
+    background: Theme.canvas;
+    default-font-family: "Segoe UI Variable Text";
+    default-font-size: 12px;
+
+    HorizontalLayout {
+        spacing: 0px;
+
+        Rectangle {
+            width: 84px;
+            background: Theme.canvas;
+
+            OrbVisual {
+                x: 19px;
+                y: 12px;
+                width: 46px;
+                height: 46px;
+                state: root.orb-state;
+            }
+
+            VerticalLayout {
+                x: 8px;
+                y: 86px;
+                width: parent.width - 16px;
+                spacing: 8px;
+
+                NavItem {
+                    glyph: "⌁"; label: "HOY";
+                    selected: root.active-section == "today";
+                    activated => { root.navigate-to("today"); }
+                }
+                NavItem {
+                    glyph: "◇"; label: "MEMORIA";
+                    selected: root.active-section == "memory";
+                    activated => { root.navigate-to("memory"); }
+                }
+                NavItem {
+                    glyph: "↻"; label: "RUTINAS";
+                    selected: root.active-section == "routines";
+                    activated => { root.navigate-to("routines"); }
+                }
+            }
+
+            Rectangle {
+                x: 24px;
+                y: parent.height - 54px;
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                border-width: 1px;
+                border-color: Theme.border;
+                background: Theme.graphite;
+
+                Text {
+                    text: "⚙";
+                    color: Theme.text-tertiary;
+                    font-family: "Segoe UI Symbol";
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Abrir configuración";
+                    clicked => { root.settings-visible = true; }
+                }
+            }
+        }
+
+        Rectangle {
+            width: 1px;
+            background: Theme.border-soft;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.ink;
+
+            Rectangle {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: 66px;
+                background: Theme.ink;
+
+                Text {
+                    x: 28px;
+                    y: 14px;
+                    width: 300px;
+                    height: 20px;
+                    text: root.active-section == "memory" ? "Archivo de memoria"
+                        : root.active-section == "routines" ? "Rutinas explicables"
+                        : "Espacio de enfoque";
+                    color: Theme.paper;
+                    font-family: "Segoe UI Variable Display";
+                    font-size: 15px;
+                    font-weight: 650;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    x: 28px;
+                    y: 35px;
+                    width: 420px;
+                    height: 16px;
+                    text: root.active-section == "memory"
+                        ? "Decisiones y contexto que tú controlas."
+                        : root.active-section == "routines"
+                        ? "Revisa la evidencia antes de activar cualquier ayuda."
+                        : "Captura lo importante. " + root.assistant-name + " mantiene el hilo.";
+                    color: Theme.text-tertiary;
+                    font-size: 10px;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    x: parent.width - 196px;
+                    y: 20px;
+                    width: 168px;
+                    height: 28px;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.border-soft;
+                    background: Theme.graphite;
+
+                    Rectangle {
+                        x: 10px;
+                        y: 10px;
+                        width: 7px;
+                        height: 7px;
+                        border-radius: 4px;
+                        background: Theme.process;
+                    }
+
+                    Text {
+                        x: 26px;
+                        width: parent.width - 34px;
+                        text: root.status-text;
+                        color: Theme.text-secondary;
+                        font-size: 10px;
+                        font-weight: 500;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    x: parent.width - 232px;
+                    y: 20px;
+                    width: 28px;
+                    height: 28px;
+                    border-radius: 14px;
+                    border-width: 1px;
+                    border-color: Theme.border-soft;
+                    background: orb-mode-touch.has-hover ? Theme.lavender-soft : Theme.graphite;
+
+                    Text {
+                        text: "◉";
+                        color: Theme.lavender;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    orb-mode-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Reducir a orbe";
+                        clicked => { root.enter-orb-mode(); }
+                    }
+                }
+
+                Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border-soft; }
+            }
+
+            Rectangle {
+                x: 28px;
+                y: 90px;
+                width: parent.width - 56px;
+                height: parent.height - 116px;
+                background: Theme.ink;
+                clip: true;
+
+                if root.today-visible : HorizontalLayout {
+                    width: parent.width;
+                    height: parent.height;
+                    spacing: 24px;
+
+                Rectangle {
+                    horizontal-stretch: 7;
+                    background: transparent;
+
+                    VerticalLayout {
+                        spacing: 16px;
+
+                        Rectangle {
+                            height: 246px;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: Theme.border-soft;
+                            background: Theme.graphite;
+
+                            SectionLabel {
+                                x: 20px;
+                                y: 16px;
+                                width: 220px;
+                                height: 16px;
+                                label: "Nueva memoria";
+                            }
+
+                            Text {
+                                x: 20px;
+                                y: 38px;
+                                width: parent.width - 40px;
+                                height: 22px;
+                                text: "¿Qué no quieres volver a reconstruir mañana?";
+                                color: Theme.paper;
+                                font-family: "Segoe UI Variable Display";
+                                font-size: 16px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+
+                            QuietInput {
+                                x: 20px;
+                                y: 72px;
+                                width: parent.width - 40px;
+                                height: 38px;
+                                value <=> root.note-title;
+                                placeholder: "Título breve";
+                            }
+
+                            QuietInput {
+                                x: 20px;
+                                y: 120px;
+                                width: parent.width - 40px;
+                                height: 72px;
+                                value <=> root.note-body;
+                                placeholder: "Decisión, contexto o siguiente paso…";
+                                multiline: true;
+                            }
+
+                            Text {
+                                x: 20px;
+                                y: 205px;
+                                width: parent.width - 160px;
+                                height: 24px;
+                                text: "Sólo se guarda lo que tú decides.";
+                                color: Theme.text-muted;
+                                font-size: 9px;
+                                vertical-alignment: center;
+                            }
+
+                            QuietButton {
+                                x: parent.width - 132px;
+                                y: 199px;
+                                width: 112px;
+                                label: "Guardar memoria";
+                                primary: true;
+                                compact: true;
+                                clicked => {
+                                    if (root.note-title != "" || root.note-body != "") {
+                                        root.save-note(root.note-title, root.note-body);
+                                        root.note-title = "";
+                                        root.note-body = "";
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            background: transparent;
+
+                            SectionLabel {
+                                x: 0px;
+                                y: 0px;
+                                width: 200px;
+                                height: 16px;
+                                label: "Memoria reciente";
+                            }
+
+                            Text {
+                                x: parent.width - 130px;
+                                y: 0px;
+                                width: 130px;
+                                height: 16px;
+                                text: root.note-count + (root.note-count == 1 ? " memoria" : " memorias");
+                                color: Theme.text-muted;
+                                font-size: 9px;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                y: 27px;
+                                width: parent.width;
+                                height: parent.height - 27px;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                background: Theme.canvas;
+
+                                if root.memory-rows.length == 0 : Rectangle {
+                                    Text {
+                                        x: 24px;
+                                        width: parent.width - 48px;
+                                        text: "Tu memoria está lista para la primera decisión que valga la pena conservar.";
+                                        color: Theme.text-muted;
+                                        font-size: 11px;
+                                        wrap: word-wrap;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                if root.memory-rows.length > 0 : Flickable {
+                                    x: 8px;
+                                    y: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height - 16px;
+                                    viewport-width: self.width;
+                                    viewport-height: memory-list.preferred-height;
+
+                                    memory-list := VerticalLayout {
+                                        width: parent.width;
+                                        spacing: 2px;
+
+                                        for memory in root.memory-rows : MemoryItem {
+                                            memory: memory;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 1px;
+                    background: Theme.border-soft;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 5;
+                    background: transparent;
+
+                    VerticalLayout {
+                        spacing: 18px;
+
+                        Rectangle {
+                            height: 320px;
+                            background: transparent;
+
+                            SectionLabel {
+                                x: 0px;
+                                y: 0px;
+                                width: 220px;
+                                height: 16px;
+                                label: "Activity pulse";
+                            }
+
+                            Text {
+                                x: 0px;
+                                y: 23px;
+                                width: parent.width;
+                                height: 18px;
+                                text: "El razonamiento queda a la vista";
+                                color: Theme.text-secondary;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                y: 56px;
+                                width: parent.width;
+                                height: 264px;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                background: Theme.canvas;
+
+                                VerticalLayout {
+                                    x: 18px;
+                                    y: 12px;
+                                    width: parent.width - 36px;
+                                    height: parent.height - 24px;
+                                    spacing: 0px;
+
+                                    PulseStep {
+                                        stage: "Observado";
+                                        title: "Volviste al workspace de Tom";
+                                        detail: "Sesión local detectada; no se leyó contenido privado.";
+                                        time: "ahora";
+                                        tone: Theme.text-tertiary;
+                                    }
+                                    PulseStep {
+                                        stage: "Inferido";
+                                        title: "Estás retomando contexto";
+                                        detail: "Este patrón suele aparecer al comenzar un bloque de desarrollo.";
+                                        time: "+2 s";
+                                        tone: Theme.lavender;
+                                    }
+                                    PulseStep {
+                                        stage: "Propuesto";
+                                        title: "Preparar el último hilo";
+                                        detail: "Hay una acción reversible esperando tu aprobación.";
+                                        time: "lista";
+                                        tone: Theme.process;
+                                        last: true;
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            vertical-stretch: 1;
+                            background: transparent;
+
+                            SectionLabel {
+                                x: 0px;
+                                y: 0px;
+                                width: 220px;
+                                height: 16px;
+                                label: "Rutinas sugeridas";
+                            }
+
+                            if root.routine-rows.length == 0 : Rectangle {
+                                y: 28px;
+                                width: parent.width;
+                                height: parent.height - 28px;
+                                border-radius: 10px;
+                                border-width: 1px;
+                                border-color: Theme.border-soft;
+                                background: Theme.canvas;
+
+                                Text {
+                                    x: 24px;
+                                    width: parent.width - 48px;
+                                    text: "Sin automatizaciones pendientes. " + root.assistant-name + " seguirá observando señales autorizadas.";
+                                    color: Theme.text-muted;
+                                    font-size: 10px;
+                                    wrap: word-wrap;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            if root.routine-rows.length > 0 : Flickable {
+                                y: 28px;
+                                width: parent.width;
+                                height: parent.height - 28px;
+                                viewport-width: self.width;
+                                viewport-height: routine-list.preferred-height;
+
+                                routine-list := VerticalLayout {
+                                    width: parent.width;
+                                    spacing: 10px;
+
+                                    for routine[index] in root.routine-rows : RoutineItem {
+                                        routine: routine;
+                                        row-index: index;
+                                        accept(row-index) => { root.accept-routine(row-index); }
+                                        dismiss(row-index) => { root.dismiss-routine(row-index); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+                if root.memory-visible : Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: Theme.ink;
+                    clip: true;
+
+                Rectangle {
+                    width: 340px;
+                    height: parent.height;
+                    border-radius: 12px;
+                    border-width: 1px;
+                    border-color: Theme.border-soft;
+                    background: Theme.graphite;
+
+                    SectionLabel { x: 20px; y: 18px; width: 220px; height: 16px; label: "Añadir al archivo"; }
+
+                    Text {
+                        x: 20px; y: 46px; width: parent.width - 40px; height: 52px;
+                        text: "Guarda una decisión con el contexto suficiente para recuperarla después.";
+                        color: Theme.paper; font-size: 15px; font-weight: 600; wrap: word-wrap;
+                    }
+
+                    Text {
+                        x: 20px; y: 118px; width: parent.width - 40px; height: 16px;
+                        text: "Título"; color: Theme.text-secondary; font-size: 10px; font-weight: 600;
+                    }
+                    QuietInput {
+                        x: 20px; y: 140px; width: parent.width - 40px; height: 40px;
+                        value <=> root.note-title; placeholder: "Qué quieres recordar";
+                    }
+
+                    Text {
+                        x: 20px; y: 198px; width: parent.width - 40px; height: 16px;
+                        text: "Contexto"; color: Theme.text-secondary; font-size: 10px; font-weight: 600;
+                    }
+                    QuietInput {
+                        x: 20px; y: 220px; width: parent.width - 40px; height: 154px;
+                        value <=> root.note-body; placeholder: "Decisión, motivo y siguiente paso…"; multiline: true;
+                    }
+
+                    Text {
+                        x: 20px; y: parent.height - 82px; width: parent.width - 40px; height: 20px;
+                        text: "Sólo tú decides qué entra en la memoria.";
+                        color: Theme.text-muted; font-size: 9px;
+                    }
+                    QuietButton {
+                        x: 20px; y: parent.height - 54px; width: parent.width - 40px;
+                        label: "Guardar memoria"; primary: true;
+                        clicked => {
+                            if (root.note-title != "" || root.note-body != "") {
+                                root.save-note(root.note-title, root.note-body);
+                                root.note-title = "";
+                                root.note-body = "";
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    x: 364px;
+                    width: parent.width - 364px;
+                    height: parent.height;
+                    background: transparent;
+
+                    SectionLabel { x: 0px; y: 0px; width: 220px; height: 16px; label: "Todo lo recordado"; }
+                    Text {
+                        x: parent.width - 150px; y: 0px; width: 150px; height: 16px;
+                        text: root.note-count + (root.note-count == 1 ? " memoria" : " memorias");
+                        color: Theme.text-muted; font-size: 9px; horizontal-alignment: right;
+                    }
+
+                    Rectangle {
+                        y: 28px; width: parent.width; height: parent.height - 28px;
+                        border-radius: 12px; border-width: 1px; border-color: Theme.border-soft;
+                        background: Theme.canvas;
+
+                        if root.memory-rows.length == 0 : Text {
+                            x: 48px; width: parent.width - 96px;
+                            text: "Aún no hay memorias. Empieza por una decisión que no quieras reconstruir mañana.";
+                            color: Theme.text-muted; font-size: 11px; wrap: word-wrap;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+
+                        if root.memory-rows.length > 0 : Flickable {
+                            x: 10px; y: 10px; width: parent.width - 20px; height: parent.height - 20px;
+                            viewport-width: self.width; viewport-height: memory-archive.preferred-height;
+
+                            memory-archive := VerticalLayout {
+                                width: parent.width; spacing: 4px;
+                                for memory in root.memory-rows : MemoryItem { memory: memory; }
+                            }
+                        }
+                    }
+                }
+            }
+
+                if root.routines-visible : Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: Theme.ink;
+                    clip: true;
+
+                Rectangle {
+                    width: 390px;
+                    height: parent.height;
+                    background: transparent;
+
+                    SectionLabel { x: 0px; y: 0px; width: 220px; height: 16px; label: "Activity pulse"; }
+                    Text {
+                        x: 0px; y: 28px; width: parent.width; height: 38px;
+                        text: "La señal completa detrás de cada propuesta.";
+                        color: Theme.paper; font-size: 15px; font-weight: 600; wrap: word-wrap;
+                    }
+
+                    Rectangle {
+                        y: 82px; width: parent.width; height: 320px;
+                        border-radius: 12px; border-width: 1px; border-color: Theme.border-soft;
+                        background: Theme.canvas;
+
+                        VerticalLayout {
+                            x: 20px; y: 16px; width: parent.width - 40px; height: parent.height - 32px;
+                            PulseStep { stage: "Observado"; title: "Volviste al workspace de Tom"; detail: "Sesión local detectada; no se leyó contenido privado."; time: "ahora"; tone: Theme.text-tertiary; }
+                            PulseStep { stage: "Inferido"; title: "Estás retomando contexto"; detail: "Este patrón suele aparecer al comenzar un bloque de desarrollo."; time: "+2 s"; tone: Theme.lavender; }
+                            PulseStep { stage: "Propuesto"; title: "Preparar el último hilo"; detail: "La acción espera tu aprobación y puede descartarse."; time: "lista"; tone: Theme.process; last: true; }
+                        }
+                    }
+
+                    Text {
+                        x: 0px; y: 426px; width: parent.width; height: 48px;
+                        text: "Tom nunca convierte una observación en automatización sin enseñarte primero el porqué.";
+                        color: Theme.text-muted; font-size: 10px; wrap: word-wrap;
+                    }
+                }
+
+                Rectangle { x: 414px; width: 1px; height: parent.height; background: Theme.border-soft; }
+
+                Rectangle {
+                    x: 439px;
+                    width: parent.width - 439px;
+                    height: parent.height;
+                    background: transparent;
+
+                    SectionLabel { x: 0px; y: 0px; width: 240px; height: 16px; label: "Esperando tu decisión"; }
+                    Text {
+                        x: 0px; y: 28px; width: parent.width; height: 38px;
+                        text: "Cada rutina explica qué detectó y qué hará antes de activarse.";
+                        color: Theme.text-secondary; font-size: 11px; wrap: word-wrap;
+                    }
+
+                    if root.routine-rows.length == 0 : Rectangle {
+                        y: 82px; width: parent.width; height: parent.height - 82px;
+                        border-radius: 12px; border-width: 1px; border-color: Theme.border-soft;
+                        background: Theme.canvas;
+
+                        Text {
+                            x: 36px; width: parent.width - 72px;
+                            text: "No hay propuestas pendientes. " + root.assistant-name + " seguirá observando sólo las señales autorizadas.";
+                            color: Theme.text-muted; font-size: 11px; wrap: word-wrap;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+
+                    if root.routine-rows.length > 0 : Flickable {
+                        y: 82px; width: parent.width; height: parent.height - 82px;
+                        viewport-width: self.width; viewport-height: routine-review.preferred-height;
+
+                        routine-review := VerticalLayout {
+                            width: parent.width; spacing: 12px;
+                            for routine[index] in root.routine-rows : RoutineItem {
+                                routine: routine; row-index: index;
+                                accept(row-index) => { root.accept-routine(row-index); }
+                                dismiss(row-index) => { root.dismiss-routine(row-index); }
+                            }
+                        }
+                    }
+                }
+                }
+            }
+        }
+    }
+
+    if false && root.onboarding-visible : Rectangle {
+        z: 100;
+        background: #0d0f14f2;
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 676px;
+            height: 492px;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: Theme.graphite;
+
+            AppMark {
+                x: 32px;
+                y: 30px;
+            }
+
+            Text {
+                x: 32px;
+                y: 86px;
+                width: parent.width - 64px;
+                height: 32px;
+                text: "Elige cómo quieres que se sienta tu asistente";
+                color: Theme.paper;
+                font-family: "Segoe UI Variable Display";
+                font-size: 23px;
+                font-weight: 650;
+                vertical-alignment: center;
+            }
+
+            Text {
+                x: 32px;
+                y: 126px;
+                width: parent.width - 64px;
+                height: 42px;
+                text: "La personalidad cambia el tono, nunca tus controles de privacidad ni la forma en que se guarda tu memoria.";
+                color: Theme.text-tertiary;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            Rectangle {
+                x: 32px;
+                y: 190px;
+                width: 294px;
+                height: 178px;
+                border-radius: 12px;
+                border-width: root.selected-persona == "professional" ? 1.5px : 1px;
+                border-color: root.selected-persona == "professional" ? Theme.lavender : Theme.border-soft;
+                background: persona-tom.has-hover ? Theme.graphite-raised : Theme.canvas;
+
+                Text {
+                    x: 20px;
+                    y: 18px;
+                    width: parent.width - 40px;
+                    height: 24px;
+                    text: "Tom";
+                    color: Theme.paper;
+                    font-family: "Segoe UI Variable Display";
+                    font-size: 17px;
+                    font-weight: 650;
+                }
+
+                Text {
+                    x: 20px;
+                    y: 50px;
+                    width: parent.width - 40px;
+                    height: 18px;
+                    text: "Preciso · sereno · directo";
+                    color: Theme.lavender;
+                    font-size: 10px;
+                    font-weight: 600;
+                }
+
+                Text {
+                    x: 20px;
+                    y: 82px;
+                    width: parent.width - 40px;
+                    height: 52px;
+                    text: "Respuestas compactas, lenguaje profesional y propuestas explicadas antes de actuar.";
+                    color: Theme.text-tertiary;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    x: 20px;
+                    y: 144px;
+                    width: parent.width - 40px;
+                    height: 16px;
+                    text: root.selected-persona == "professional" ? "SELECCIONADO" : "ELEGIR TOM";
+                    color: root.selected-persona == "professional" ? Theme.paper : Theme.text-muted;
+                    font-size: 9px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                }
+
+                persona-tom := TouchArea {
+                    accessible-role: radio-button;
+                    accessible-label: "Elegir personalidad Tom, profesional";
+                    clicked => {
+                        root.selected-persona = "professional";
+                        root.assistant-name = "Tom";
+                    }
+                }
+            }
+
+            Rectangle {
+                x: 350px;
+                y: 190px;
+                width: 294px;
+                height: 178px;
+                border-radius: 12px;
+                border-width: root.selected-persona == "friendly" ? 1.5px : 1px;
+                border-color: root.selected-persona == "friendly" ? Theme.lavender : Theme.border-soft;
+                background: persona-tomy.has-hover ? Theme.graphite-raised : Theme.canvas;
+
+                Text {
+                    x: 20px;
+                    y: 18px;
+                    width: parent.width - 40px;
+                    height: 24px;
+                    text: "Tomy";
+                    color: Theme.paper;
+                    font-family: "Segoe UI Variable Display";
+                    font-size: 17px;
+                    font-weight: 650;
+                }
+
+                Text {
+                    x: 20px;
+                    y: 50px;
+                    width: parent.width - 40px;
+                    height: 18px;
+                    text: "Cercano · chill · alentador";
+                    color: Theme.lavender;
+                    font-size: 10px;
+                    font-weight: 600;
+                }
+
+                Text {
+                    x: 20px;
+                    y: 82px;
+                    width: parent.width - 40px;
+                    height: 52px;
+                    text: "El mismo criterio y privacidad, con una voz más cálida para acompañar tu ritmo diario.";
+                    color: Theme.text-tertiary;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    x: 20px;
+                    y: 144px;
+                    width: parent.width - 40px;
+                    height: 16px;
+                    text: root.selected-persona == "friendly" ? "SELECCIONADO" : "ELEGIR TOMY";
+                    color: root.selected-persona == "friendly" ? Theme.paper : Theme.text-muted;
+                    font-size: 9px;
+                    font-weight: 700;
+                    letter-spacing: 1px;
+                }
+
+                persona-tomy := TouchArea {
+                    accessible-role: radio-button;
+                    accessible-label: "Elegir personalidad Tomy, amigable";
+                    clicked => {
+                        root.selected-persona = "friendly";
+                        root.assistant-name = "Tomy";
+                    }
+                }
+            }
+
+            Text {
+                x: 32px;
+                y: 400px;
+                width: 330px;
+                height: 32px;
+                text: "Local primero · acciones con aprobación\nPuedes cambiar esto más tarde";
+                color: Theme.text-muted;
+                font-size: 9px;
+                vertical-alignment: center;
+            }
+
+            QuietButton {
+                x: parent.width - 166px;
+                y: 399px;
+                width: 134px;
+                label: "Entrar como " + root.assistant-name;
+                primary: true;
+                clicked => {
+                    root.persona-selected(root.selected-persona);
+                    root.onboarding-visible = false;
+                }
+            }
+
+            Hairline {
+                x: 32px;
+                y: 452px;
+                width: parent.width - 64px;
+            }
+
+            Text {
+                x: 32px;
+                y: 461px;
+                width: parent.width - 64px;
+                height: 16px;
+                text: "Built with Slint";
+                color: Theme.text-muted;
+                font-size: 8px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    if root.onboarding-visible : Rectangle {
+        z: 110;
+        background: Theme.canvas;
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 920px;
+            height: 590px;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: Theme.border-soft;
+            background: Theme.ink;
+
+            Rectangle {
+                width: 286px;
+                height: parent.height;
+                border-radius: 16px;
+                background: Theme.canvas;
+
+                OrbVisual {
+                    x: 54px;
+                    y: 42px;
+                    width: 178px;
+                    height: 178px;
+                    state: root.onboarding-step == 0 ? "curious"
+                        : root.onboarding-step == 4 ? "thinking" : root.orb-state;
+                }
+
+                Text {
+                    x: 32px;
+                    y: 226px;
+                    width: parent.width - 64px;
+                    height: 24px;
+                    text: root.assistant-name;
+                    color: Theme.paper;
+                    font-family: "Segoe UI Variable Display";
+                    font-size: 18px;
+                    font-weight: 650;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    x: 32px;
+                    y: 254px;
+                    width: parent.width - 64px;
+                    height: 38px;
+                    text: root.onboarding-step == 0 ? "Una presencia tranquila para tu escritorio."
+                        : root.onboarding-step == 1 ? "Mi voz se adapta; tus controles no cambian."
+                        : root.onboarding-step == 2 ? "Aprenderé el contexto de tu trabajo."
+                        : root.onboarding-step == 3 ? "Tú decides cuánto puedo anticiparme."
+                        : "Puedes conectar una IA ahora o después.";
+                    color: Theme.text-tertiary;
+                    font-size: 10px;
+                    wrap: word-wrap;
+                    horizontal-alignment: center;
+                }
+
+                for step[index] in ["Hola", "Personalidad", "Tu mundo", "Iniciativa", "Inteligencia"] : Rectangle {
+                    x: 34px;
+                    y: 330px + index * 42px;
+                    width: parent.width - 68px;
+                    height: 32px;
+                    border-radius: 7px;
+                    background: root.onboarding-step == index ? Theme.graphite : transparent;
+
+                    Rectangle {
+                        x: 8px;
+                        y: 11px;
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: root.onboarding-step > index ? Theme.process
+                            : root.onboarding-step == index ? Theme.lavender : Theme.border;
+                    }
+
+                    Text {
+                        x: 28px;
+                        width: parent.width - 36px;
+                        text: step;
+                        color: root.onboarding-step == index ? Theme.paper : Theme.text-muted;
+                        font-size: 10px;
+                        font-weight: root.onboarding-step == index ? 650 : 500;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Text {
+                    x: 28px;
+                    y: parent.height - 34px;
+                    width: parent.width - 56px;
+                    height: 14px;
+                    text: "Local primero · siempre reversible";
+                    color: Theme.text-muted;
+                    font-size: 8px;
+                    horizontal-alignment: center;
+                }
+            }
+
+            Rectangle {
+                x: 286px;
+                width: 1px;
+                height: parent.height;
+                background: Theme.border-soft;
+            }
+
+            Rectangle {
+                x: 287px;
+                width: parent.width - 287px;
+                height: parent.height;
+                background: transparent;
+
+                Text {
+                    x: 42px;
+                    y: 38px;
+                    width: parent.width - 84px;
+                    height: 34px;
+                    text: root.onboarding-step == 0 ? "Hola. Soy Tom."
+                        : root.onboarding-step == 1 ? "¿Cómo quieres que hable contigo?"
+                        : root.onboarding-step == 2 ? "¿En qué mundo trabajaremos juntos?"
+                        : root.onboarding-step == 3 ? "¿Cuánta iniciativa quieres de mí?"
+                        : "¿Qué inteligencia quieres conectar?";
+                    color: Theme.paper;
+                    font-family: "Segoe UI Variable Display";
+                    font-size: 22px;
+                    font-weight: 650;
+                }
+
+                Text {
+                    x: 42px;
+                    y: 80px;
+                    width: parent.width - 84px;
+                    height: 42px;
+                    text: root.onboarding-step == 0
+                        ? "Antes de mostrarte paneles, quiero entender cómo acompañarte. Son cuatro decisiones cortas y podrás cambiarlas después."
+                        : root.onboarding-step == 1
+                        ? "Tom es más preciso y profesional. Tomy conserva el mismo criterio, con una voz más cercana y chill."
+                        : root.onboarding-step == 2
+                        ? "Esto activa vocabulario, rutinas y sugerencias específicas para tu actividad principal."
+                        : root.onboarding-step == 3
+                        ? "Nunca ejecutaré acciones sensibles sin aprobación, sin importar el nivel elegido."
+                        : "La clave de nube vivirá en Windows Credential Manager. Los modelos locales pueden funcionar sin enviar contenido fuera del PC.";
+                    color: Theme.text-tertiary;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+
+                if root.onboarding-step == 0 : Rectangle {
+                    x: 42px;
+                    y: 150px;
+                    width: parent.width - 84px;
+                    height: 250px;
+                    border-radius: 12px;
+                    border-width: 1px;
+                    border-color: Theme.border-soft;
+                    background: Theme.canvas;
+
+                    Text {
+                        x: 24px; y: 24px; width: parent.width - 48px; height: 26px;
+                        text: "Lo importante desde el primer minuto";
+                        color: Theme.paper; font-size: 14px; font-weight: 650;
+                    }
+                    Text {
+                        x: 24px; y: 70px; width: parent.width - 48px; height: 28px;
+                        text: "01   Memoria visible y editable";
+                        color: Theme.text-secondary; font-size: 11px;
+                    }
+                    Text {
+                        x: 24px; y: 112px; width: parent.width - 48px; height: 28px;
+                        text: "02   Rutinas explicadas antes de actuar";
+                        color: Theme.text-secondary; font-size: 11px;
+                    }
+                    Text {
+                        x: 24px; y: 154px; width: parent.width - 48px; height: 28px;
+                        text: "03   IA local o cloud elegida por ti";
+                        color: Theme.text-secondary; font-size: 11px;
+                    }
+                    Text {
+                        x: 24px; y: 196px; width: parent.width - 48px; height: 28px;
+                        text: "04   Un orbe discreto cuando no necesites el panel";
+                        color: Theme.text-secondary; font-size: 11px;
+                    }
+                }
+
+                if root.onboarding-step == 1 : Rectangle {
+                    x: 42px; y: 142px; width: parent.width - 84px; height: 250px; background: transparent;
+
+                    OnboardingChoice {
+                        y: 0px; width: parent.width; height: 104px;
+                        choice-id: "professional"; label: "Tom";
+                        detail: "Sereno, compacto y directo. Ideal cuando quieres foco y lenguaje profesional.";
+                        selected: root.selected-persona == self.choice-id;
+                        chosen(id) => { root.selected-persona = id; root.assistant-name = "Tom"; }
+                    }
+                    OnboardingChoice {
+                        y: 120px; width: parent.width; height: 104px;
+                        choice-id: "friendly"; label: "Tomy";
+                        detail: "Cercano, cálido y alentador. El mismo criterio con una energía más relajada.";
+                        selected: root.selected-persona == self.choice-id;
+                        chosen(id) => { root.selected-persona = id; root.assistant-name = "Tomy"; }
+                    }
+                }
+
+                if root.onboarding-step == 2 : Rectangle {
+                    x: 42px; y: 138px; width: parent.width - 84px; height: 310px; background: transparent;
+
+                    OnboardingChoice { x: 0px; y: 0px; width: 244px; choice-id: "developer"; label: "Desarrollo"; detail: "Código, Git, terminal y proyectos"; selected: root.selected-profession == self.choice-id; chosen(id) => { root.selected-profession = id; } }
+                    OnboardingChoice { x: 260px; y: 0px; width: 244px; choice-id: "office"; label: "Oficina"; detail: "Documentos, reuniones y seguimiento"; selected: root.selected-profession == self.choice-id; chosen(id) => { root.selected-profession = id; } }
+                    OnboardingChoice { x: 0px; y: 92px; width: 244px; choice-id: "student"; label: "Estudio"; detail: "Lecturas, entregas y aprendizaje"; selected: root.selected-profession == self.choice-id; chosen(id) => { root.selected-profession = id; } }
+                    OnboardingChoice { x: 260px; y: 92px; width: 244px; choice-id: "creator"; label: "Creación"; detail: "Ideas, contenido y producción"; selected: root.selected-profession == self.choice-id; chosen(id) => { root.selected-profession = id; } }
+                    OnboardingChoice { x: 0px; y: 184px; width: 504px; choice-id: "general"; label: "Uso general"; detail: "Organización diaria sin una profesión dominante"; selected: root.selected-profession == self.choice-id; chosen(id) => { root.selected-profession = id; } }
+                }
+
+                if root.onboarding-step == 3 : Rectangle {
+                    x: 42px; y: 142px; width: parent.width - 84px; height: 310px; background: transparent;
+
+                    OnboardingChoice { y: 0px; width: parent.width; choice-id: "focused"; label: "Enfocado"; detail: "Sólo responde y recuerda cuando se lo pidas."; selected: root.selected-assistance == self.choice-id; chosen(id) => { root.selected-assistance = id; } }
+                    OnboardingChoice { y: 92px; width: parent.width; choice-id: "balanced"; label: "Equilibrado"; detail: "Sugiere ayudas cuando el patrón es claro, sin interrumpir."; selected: root.selected-assistance == self.choice-id; chosen(id) => { root.selected-assistance = id; } }
+                    OnboardingChoice { y: 184px; width: parent.width; choice-id: "proactive"; label: "Proactivo"; detail: "Busca oportunidades y prepara acciones para que tú las apruebes."; selected: root.selected-assistance == self.choice-id; chosen(id) => { root.selected-assistance = id; } }
+                }
+
+                if root.onboarding-step == 4 : Rectangle {
+                    x: 42px; y: 142px; width: parent.width - 84px; height: 310px; background: transparent;
+
+                    OnboardingChoice { y: 0px; width: parent.width; choice-id: "later"; label: "Configurar después"; detail: "Entra a Tom sin proveedor; memoria y notas siguen disponibles."; selected: root.selected-ai-setup == self.choice-id; chosen(id) => { root.selected-ai-setup = id; } }
+                    OnboardingChoice { y: 92px; width: parent.width; choice-id: "cloud"; label: "Proveedor cloud"; detail: "OpenAI, Anthropic, Gemini o endpoint compatible con tu API key."; selected: root.selected-ai-setup == self.choice-id; chosen(id) => { root.selected-ai-setup = id; } }
+                    OnboardingChoice { y: 184px; width: parent.width; choice-id: "local"; label: "Modelo local"; detail: "Ollama, LM Studio o un endpoint/modelo propio en este PC."; selected: root.selected-ai-setup == self.choice-id; chosen(id) => { root.selected-ai-setup = id; } }
+                }
+
+                if root.onboarding-step > 0 : QuietButton {
+                    x: 42px;
+                    y: parent.height - 66px;
+                    width: 104px;
+                    label: "Atrás";
+                    compact: true;
+                    clicked => { root.onboarding-step -= 1; }
+                }
+
+                QuietButton {
+                    x: parent.width - 184px;
+                    y: parent.height - 72px;
+                    width: 142px;
+                    label: root.onboarding-step == 0 ? "Conocernos"
+                        : root.onboarding-step == 4 ? "Terminar" : "Continuar";
+                    primary: true;
+                    clicked => {
+                        if root.onboarding-step < 4 {
+                            root.onboarding-step += 1;
+                        } else {
+                            root.onboarding-completed(root.selected-persona, root.selected-profession, root.selected-assistance);
+                            root.onboarding-visible = false;
+                            if root.selected-ai-setup == "cloud" {
+                                root.ai-provider = "openai";
+                                root.settings-visible = true;
+                            } else if root.selected-ai-setup == "local" {
+                                root.ai-provider = "ollama";
+                                root.settings-visible = true;
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    x: 42px;
+                    y: parent.height - 28px;
+                    width: parent.width - 84px;
+                    height: 12px;
+                    text: "Built with Slint";
+                    color: Theme.text-muted;
+                    font-size: 8px;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+    }
+
+    if root.settings-visible : Rectangle {
+        z: 120;
+        background: #0d0f14ed;
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 820px;
+            height: 580px;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: Theme.border;
+            background: Theme.graphite;
+
+            Text {
+                x: 28px;
+                y: 24px;
+                width: 420px;
+                height: 28px;
+                text: "Inteligencia artificial";
+                color: Theme.paper;
+                font-family: "Segoe UI Variable Display";
+                font-size: 20px;
+                font-weight: 650;
+            }
+
+            Text {
+                x: 28px;
+                y: 56px;
+                width: 660px;
+                height: 32px;
+                text: "Conecta un proveedor de nube o un modelo que ya se ejecute en tu PC.";
+                color: Theme.text-tertiary;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+
+            SectionLabel { x: 28px; y: 104px; width: 180px; height: 16px; label: "Modelos en la nube"; }
+
+            ProviderOption {
+                x: 28px; y: 128px; width: 176px;
+                provider-id: "openai"; label: "OpenAI"; detail: "API key propia";
+                selected: root.ai-provider == self.provider-id;
+                chosen(id) => { root.ai-provider = id; }
+            }
+            ProviderOption {
+                x: 214px; y: 128px; width: 176px;
+                provider-id: "anthropic"; label: "Anthropic"; detail: "Claude con tu clave";
+                selected: root.ai-provider == self.provider-id;
+                chosen(id) => { root.ai-provider = id; }
+            }
+            ProviderOption {
+                x: 400px; y: 128px; width: 176px;
+                provider-id: "gemini"; label: "Gemini"; detail: "Google AI";
+                selected: root.ai-provider == self.provider-id;
+                chosen(id) => { root.ai-provider = id; }
+            }
+            ProviderOption {
+                x: 586px; y: 128px; width: 206px;
+                provider-id: "custom-cloud"; label: "Cloud compatible"; detail: "Endpoint personalizado";
+                selected: root.ai-provider == self.provider-id;
+                chosen(id) => { root.ai-provider = id; }
+            }
+
+            SectionLabel { x: 28px; y: 202px; width: 180px; height: 16px; label: "Modelos locales"; }
+
+            ProviderOption {
+                x: 28px; y: 226px; width: 238px;
+                provider-id: "ollama"; label: "Ollama"; detail: "Local · endpoint automático";
+                selected: root.ai-provider == self.provider-id;
+                chosen(id) => { root.ai-provider = id; }
+            }
+            ProviderOption {
+                x: 276px; y: 226px; width: 238px;
+                provider-id: "lm-studio"; label: "LM Studio"; detail: "Servidor local compatible";
+                selected: root.ai-provider == self.provider-id;
+                chosen(id) => { root.ai-provider = id; }
+            }
+            ProviderOption {
+                x: 524px; y: 226px; width: 268px;
+                provider-id: "custom-local"; label: "Local personalizado"; detail: "Endpoint o ruta de modelo";
+                selected: root.ai-provider == self.provider-id;
+                chosen(id) => { root.ai-provider = id; }
+            }
+
+            SectionLabel { x: 28px; y: 304px; width: 240px; height: 16px; label: "Conexión"; }
+
+            Text {
+                x: 28px; y: 330px; width: 360px; height: 16px;
+                text: root.ai-provider == "ollama" || root.ai-provider == "lm-studio" || root.ai-provider == "custom-local"
+                    ? "Endpoint local" : "Endpoint compatible (opcional)";
+                color: Theme.text-secondary; font-size: 10px; font-weight: 600;
+            }
+            QuietInput {
+                x: 28px; y: 350px; width: 366px; height: 38px;
+                value <=> root.local-endpoint;
+                placeholder: root.ai-provider == "ollama" ? "http://127.0.0.1:11434" : "https://… o http://127.0.0.1:…";
+            }
+
+            Text {
+                x: 410px; y: 330px; width: 382px; height: 16px;
+                text: "Modelo o ruta local";
+                color: Theme.text-secondary; font-size: 10px; font-weight: 600;
+            }
+            QuietInput {
+                x: 410px; y: 350px; width: 382px; height: 38px;
+                value <=> root.local-model-path;
+                placeholder: "llama3.2, qwen… o C:\\modelos\\modelo.gguf";
+            }
+
+            Text {
+                x: 28px; y: 408px; width: 300px; height: 16px;
+                text: "API key" + (root.has-api-key ? " · guardada" : "");
+                color: root.has-api-key ? Theme.process : Theme.text-secondary;
+                font-size: 10px; font-weight: 600;
+            }
+            QuietInput {
+                x: 28px; y: 428px; width: 506px; height: 38px;
+                value <=> root.api-key-input;
+                placeholder: root.has-api-key ? "Deja vacío para conservar la clave actual" : "Pega tu clave; no se mostrará de nuevo";
+                secret: true;
+            }
+
+            if root.has-api-key : QuietButton {
+                x: 546px; y: 431px; width: 120px;
+                label: "Borrar clave"; compact: true;
+                clicked => {
+                    root.clear-api-key();
+                    root.api-key-input = "";
+                }
+            }
+
+            Text {
+                x: 28px; y: 482px; width: 540px; height: 32px;
+                text: "Las claves se guardan en Windows Credential Manager. Nunca se escriben en SQLite, Git ni archivos del proyecto.";
+                color: Theme.text-muted; font-size: 9px; wrap: word-wrap;
+            }
+
+            QuietButton {
+                x: 28px; y: 526px; width: 126px;
+                label: "Desactivar IA"; compact: true;
+                clicked => { root.ai-provider = "disabled"; }
+            }
+
+            QuietButton {
+                x: 164px; y: 526px; width: 154px;
+                label: "Repetir bienvenida"; compact: true;
+                clicked => {
+                    root.settings-visible = false;
+                    root.onboarding-step = 0;
+                    root.onboarding-visible = true;
+                }
+            }
+
+            QuietButton {
+                x: parent.width - 280px; y: 526px; width: 102px;
+                label: "Cerrar"; compact: true;
+                clicked => { root.settings-visible = false; }
+            }
+
+            QuietButton {
+                x: parent.width - 168px; y: 520px; width: 140px;
+                label: "Guardar conexión"; primary: true;
+                clicked => {
+                    root.save-ai-settings(root.ai-provider, root.api-key-input, root.local-endpoint, root.local-model-path);
+                    root.api-key-input = "";
+                    root.settings-visible = false;
+                }
+            }
+        }
+    }
+}
+
+export component OrbWindow inherits Window {
+    in-out property <string> assistant-name: "Tom";
+    in-out property <string> orb-state: "idle";
+    in-out property <int> orb-size: 176;
+    property <bool> controls-visible: orb-touch.has-hover || shrink-touch.has-hover || grow-touch.has-hover;
+    callback restore-dashboard();
+    callback drag-orb(float, float);
+    callback resize-orb(string);
+
+    title: assistant-name + " — modo orbe";
+    preferred-width: root.orb-size * 1px;
+    preferred-height: root.orb-size * 1px;
+    min-width: 96px;
+    min-height: 96px;
+    max-width: 288px;
+    max-height: 288px;
+    no-frame: true;
+    always-on-top: true;
+    background: transparent;
+
+    Rectangle {
+        x: 4px;
+        y: 4px;
+        width: parent.width - 8px;
+        height: parent.height - 8px;
+        border-radius: self.width / 2;
+        background: root.controls-visible ? #171a227d : transparent;
+
+        OrbVisual {
+            x: 4px;
+            y: 4px;
+            width: parent.width - 8px;
+            height: parent.height - 8px;
+            state: root.orb-state;
+        }
+
+        orb-touch := TouchArea {
+            property <bool> dragged: false;
+            accessible-role: button;
+            accessible-label: "Arrastrar o restaurar " + root.assistant-name;
+            mouse-cursor: move;
+
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
+                    self.dragged = false;
+                }
+            }
+            moved => {
+                if (self.pressed && (abs(self.mouse-x - self.pressed-x) > 1px || abs(self.mouse-y - self.pressed-y) > 1px)) {
+                    self.dragged = true;
+                    root.drag-orb(
+                        (self.mouse-x - self.pressed-x) / 1px,
+                        (self.mouse-y - self.pressed-y) / 1px
+                    );
+                }
+            }
+            clicked => {
+                if (!self.dragged) {
+                    root.restore-dashboard();
+                }
+            }
+            scroll-event(event) => {
+                if (event.delta-y != 0px) {
+                    root.resize-orb(event.delta-y > 0px ? "larger" : "smaller");
+                    return accept;
+                }
+                reject
+            }
+        }
+
+        Rectangle {
+            x: 12px;
+            y: parent.height - 36px;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            border-width: root.controls-visible ? 1px : 0px;
+            border-color: Theme.border;
+            background: root.controls-visible ? #0d0f14e6 : transparent;
+
+            Text {
+                text: "−";
+                color: root.controls-visible ? (root.orb-size > 96 ? Theme.paper : Theme.text-muted) : transparent;
+                font-size: 14px;
+                font-weight: 650;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            shrink-touch := TouchArea {
+                enabled: root.orb-size > 96;
+                accessible-role: button;
+                accessible-label: "Reducir tamaño del orbe";
+                mouse-cursor: pointer;
+                clicked => { root.resize-orb("smaller"); }
+            }
+        }
+
+        Rectangle {
+            x: parent.width - 36px;
+            y: parent.height - 36px;
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            border-width: root.controls-visible ? 1px : 0px;
+            border-color: Theme.border;
+            background: root.controls-visible ? #0d0f14e6 : transparent;
+
+            Text {
+                text: "+";
+                color: root.controls-visible ? (root.orb-size < 288 ? Theme.paper : Theme.text-muted) : transparent;
+                font-size: 14px;
+                font-weight: 650;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            grow-touch := TouchArea {
+                enabled: root.orb-size < 288;
+                accessible-role: button;
+                accessible-label: "Aumentar tamaño del orbe";
+                mouse-cursor: pointer;
+                clicked => { root.resize-orb("larger"); }
+            }
+        }
+    }
+}

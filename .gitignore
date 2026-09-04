@@ -1,0 +1,21 @@
+/target
+/.idea
+/.vscode
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.pfx
+*.p12
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Notas internas de trabajo
+AGENTS.md
+CLAUDE.md
+.claude/
+.interface-design/
