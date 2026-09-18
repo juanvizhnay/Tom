@@ -1,26 +1,6 @@
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PersonaChoice {
-    #[default]
-    Tom,
-    Tomy,
-}
-
-impl PersonaChoice {
-    pub fn parse(value: &str) -> Self {
-        if value.eq_ignore_ascii_case("tomy") || value.eq_ignore_ascii_case("friendly") {
-            Self::Tomy
-        } else {
-            Self::Tom
-        }
-    }
-
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::Tom => "Tom",
-            Self::Tomy => "Tomy",
-        }
-    }
-}
+use tom_core::{
+    AiProvider, AiSetup, AssistanceStyle, OnboardingStep, Persona, ProfessionalProfile, UserProfile,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum WindowMode {
@@ -118,12 +98,9 @@ impl WorkspaceSection {
     }
 
     pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "today" => Some(Self::Today),
-            "memory" => Some(Self::Memory),
-            "routines" => Some(Self::Routines),
-            _ => None,
-        }
+        Self::ALL
+            .into_iter()
+            .find(|section| section.stable_id() == value)
     }
 
     pub const fn visibility(self) -> (bool, bool, bool) {
@@ -132,6 +109,24 @@ impl WorkspaceSection {
             matches!(self, Self::Memory),
             matches!(self, Self::Routines),
         )
+    }
+
+    /// Heading shown in the workspace header.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Today => "Espacio de enfoque",
+            Self::Memory => "Archivo de memoria",
+            Self::Routines => "Rutinas explicables",
+        }
+    }
+
+    /// Supporting line under the heading, spoken about the assistant by name.
+    pub fn subtitle(self, assistant_name: &str) -> String {
+        match self {
+            Self::Today => format!("Captura lo importante. {assistant_name} mantiene el hilo."),
+            Self::Memory => "Decisiones y contexto que tú controlas.".to_owned(),
+            Self::Routines => "Revisa la evidencia antes de activar cualquier ayuda.".to_owned(),
+        }
     }
 }
 
@@ -146,10 +141,11 @@ pub enum OrbState {
     Warning,
     Error,
     Sleeping,
+    Curious,
 }
 
 impl OrbState {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Idle,
         Self::Listening,
         Self::Thinking,
@@ -158,6 +154,7 @@ impl OrbState {
         Self::Warning,
         Self::Error,
         Self::Sleeping,
+        Self::Curious,
     ];
 
     pub const fn stable_id(self) -> &'static str {
@@ -170,119 +167,141 @@ impl OrbState {
             Self::Warning => "warning",
             Self::Error => "error",
             Self::Sleeping => "sleeping",
+            Self::Curious => "curious",
         }
     }
-}
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum AiProviderChoice {
-    #[default]
-    Disabled,
-    OpenAi,
-    Anthropic,
-    Gemini,
-    CustomCloud,
-    Ollama,
-    LmStudio,
-    CustomLocal,
-}
-
-impl AiProviderChoice {
+    /// Resolves an id back into a state; every id has a matching orb asset.
     pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "disabled" => Some(Self::Disabled),
-            "openai" => Some(Self::OpenAi),
-            "anthropic" => Some(Self::Anthropic),
-            "gemini" => Some(Self::Gemini),
-            "custom-cloud" => Some(Self::CustomCloud),
-            "ollama" => Some(Self::Ollama),
-            "lm-studio" => Some(Self::LmStudio),
-            "custom-local" => Some(Self::CustomLocal),
-            _ => None,
-        }
-    }
-
-    pub const fn stable_id(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::OpenAi => "openai",
-            Self::Anthropic => "anthropic",
-            Self::Gemini => "gemini",
-            Self::CustomCloud => "custom-cloud",
-            Self::Ollama => "ollama",
-            Self::LmStudio => "lm-studio",
-            Self::CustomLocal => "custom-local",
-        }
-    }
-
-    const fn is_cloud(self) -> bool {
-        matches!(
-            self,
-            Self::OpenAi | Self::Anthropic | Self::Gemini | Self::CustomCloud
-        )
+        Self::ALL
+            .into_iter()
+            .find(|state| state.stable_id() == value)
     }
 }
 
-#[derive(Eq, PartialEq)]
+/// A connection the user asked to save. Credentials never travel through this form: they
+/// are managed on their own, so nothing here is secret.
+#[derive(Debug, Eq, PartialEq)]
 pub struct AiSettingsSubmission {
-    pub provider: AiProviderChoice,
-    pub new_api_key: Option<String>,
+    pub provider: AiProvider,
     pub endpoint: String,
     pub model_path: String,
 }
 
-impl std::fmt::Debug for AiSettingsSubmission {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let api_key = self.new_api_key.as_ref().map(|_| "[REDACTED]");
-        formatter
-            .debug_struct("AiSettingsSubmission")
-            .field("provider", &self.provider)
-            .field("new_api_key", &api_key)
-            .field("endpoint", &self.endpoint)
-            .field("model_path", &self.model_path)
-            .finish()
-    }
-}
-
 impl AiSettingsSubmission {
+    /// Credentials are not checked here. No key is required to save a connection: Tom only
+    /// needs one way in overall, and whether it has one is asked of the vault, not the form.
     pub fn try_from_ui(
         provider: &str,
-        api_key: &str,
         endpoint: &str,
         model_path: &str,
-        has_existing_key: bool,
     ) -> Result<Self, &'static str> {
-        let provider = AiProviderChoice::parse(provider).ok_or("Proveedor de IA no reconocido")?;
-        if provider == AiProviderChoice::Disabled {
+        let provider = AiProvider::from_stable_id(provider).ok_or(UNKNOWN_PROVIDER)?;
+        if provider == AiProvider::Disabled {
             return Ok(Self {
                 provider,
-                new_api_key: None,
                 endpoint: String::new(),
                 model_path: String::new(),
             });
         }
 
-        let new_api_key = (!api_key.trim().is_empty()).then(|| api_key.to_owned());
         let endpoint = endpoint.trim().to_owned();
         let model_path = model_path.trim().to_owned();
 
-        if provider.is_cloud() && new_api_key.is_none() && !has_existing_key {
-            return Err("Agrega una API key para el proveedor cloud");
-        }
-        if provider == AiProviderChoice::CustomCloud && endpoint.is_empty() {
+        if provider.requires_endpoint() && endpoint.is_empty() {
             return Err("Configura el endpoint del proveedor");
         }
-        if provider == AiProviderChoice::CustomLocal && endpoint.is_empty() && model_path.is_empty()
-        {
+        if provider.requires_model_location() && endpoint.is_empty() && model_path.is_empty() {
             return Err("Configura un endpoint o modelo local");
         }
 
         Ok(Self {
             provider,
-            new_api_key,
             endpoint,
             model_path,
         })
+    }
+}
+
+/// A credential the user asked to store for one provider.
+#[derive(Eq, PartialEq)]
+pub struct ApiKeySubmission {
+    pub provider: AiProvider,
+    pub api_key: String,
+}
+
+impl std::fmt::Debug for ApiKeySubmission {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiKeySubmission")
+            .field("provider", &self.provider)
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl ApiKeySubmission {
+    /// Surrounding whitespace is dropped, since it only ever arrives from a sloppy paste and
+    /// no provider issues keys that begin or end with it. The key itself is never altered.
+    pub fn try_from_ui(provider: &str, api_key: &str) -> Result<Self, &'static str> {
+        let provider = AiProvider::from_stable_id(provider).ok_or(UNKNOWN_PROVIDER)?;
+        if !provider.accepts_api_key() {
+            return Err(PROVIDER_WITHOUT_KEY);
+        }
+        if api_key.trim().is_empty() {
+            return Err(EMPTY_API_KEY);
+        }
+
+        Ok(Self {
+            provider,
+            api_key: api_key.trim().to_owned(),
+        })
+    }
+}
+
+pub const UNKNOWN_PROVIDER: &str = "Proveedor de IA no reconocido";
+pub const UNKNOWN_PROFILE: &str = "Perfil profesional no reconocido";
+pub const UNKNOWN_ASSISTANCE: &str = "Nivel de iniciativa no reconocido";
+pub const UNKNOWN_PERSONA: &str = "Personalidad no reconocida";
+pub const UNKNOWN_AI_SETUP: &str = "Opcion de inteligencia no reconocida";
+pub const EMPTY_API_KEY: &str = "Pega una clave antes de guardarla";
+pub const PROVIDER_WITHOUT_KEY: &str = "Este proveedor no usa claves";
+/// Shown whenever Tom has neither a stored key nor a local model it can reach.
+pub const NO_INTELLIGENCE: &str = "Tom no puede pensar: anade una clave o un modelo local";
+
+/// The four answers onboarding collects, resolved from the ids the interface sends back.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OnboardingAnswers {
+    pub persona: Persona,
+    pub professional_profile: ProfessionalProfile,
+    pub assistance_style: AssistanceStyle,
+    pub ai_setup: AiSetup,
+}
+
+impl OnboardingAnswers {
+    /// Rejects the whole set when any id is unknown, so a half-parsed profile is never saved.
+    pub fn try_from_ui(
+        persona: &str,
+        professional_profile: &str,
+        assistance_style: &str,
+        ai_setup: &str,
+    ) -> Result<Self, &'static str> {
+        Ok(Self {
+            persona: Persona::from_stable_id(persona).ok_or(UNKNOWN_PERSONA)?,
+            professional_profile: ProfessionalProfile::from_stable_id(professional_profile)
+                .ok_or(UNKNOWN_PROFILE)?,
+            assistance_style: AssistanceStyle::from_stable_id(assistance_style)
+                .ok_or(UNKNOWN_ASSISTANCE)?,
+            ai_setup: AiSetup::from_stable_id(ai_setup).ok_or(UNKNOWN_AI_SETUP)?,
+        })
+    }
+
+    pub const fn profile(self) -> UserProfile {
+        UserProfile {
+            persona: self.persona,
+            professional_profile: self.professional_profile,
+            assistance_style: self.assistance_style,
+        }
     }
 }
 
@@ -311,12 +330,22 @@ impl NoteSubmission {
     }
 }
 
+/// What pressing the onboarding primary button did.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OnboardingAdvance {
+    /// The flow moved to the next question.
+    Moved,
+    /// The last question was answered and the profile is ready to be saved.
+    Finished,
+}
+
 #[derive(Debug)]
 pub struct Controller {
-    persona: PersonaChoice,
+    persona: Persona,
     status_text: &'static str,
     note_count: i32,
     onboarding_visible: bool,
+    onboarding_step: OnboardingStep,
     window_mode: WindowMode,
     orb_state: OrbState,
     active_section: WorkspaceSection,
@@ -326,10 +355,11 @@ pub struct Controller {
 impl Default for Controller {
     fn default() -> Self {
         Self {
-            persona: PersonaChoice::Tom,
+            persona: Persona::Tom,
             status_text: "Listo para ayudarte",
             note_count: 0,
             onboarding_visible: true,
+            onboarding_step: OnboardingStep::Welcome,
             window_mode: WindowMode::Dashboard,
             orb_state: OrbState::Idle,
             active_section: WorkspaceSection::Today,
@@ -339,17 +369,19 @@ impl Default for Controller {
 }
 
 impl Controller {
-    pub fn restored(persona: PersonaChoice, note_count: usize) -> Self {
-        Self {
+    pub fn restored(persona: Persona, note_count: usize) -> Self {
+        let mut controller = Self {
             persona,
             status_text: "Memoria local sincronizada",
-            note_count: i32::try_from(note_count).unwrap_or(i32::MAX),
             onboarding_visible: false,
-            window_mode: WindowMode::Dashboard,
-            orb_state: OrbState::Idle,
-            active_section: WorkspaceSection::Today,
-            orb_size: DEFAULT_ORB_SIZE,
-        }
+            ..Self::default()
+        };
+        controller.set_note_count(note_count);
+        controller
+    }
+
+    pub const fn persona(&self) -> Persona {
+        self.persona
     }
 
     pub const fn assistant_name(&self) -> &'static str {
@@ -364,8 +396,51 @@ impl Controller {
         self.note_count
     }
 
+    /// Adopts the number of notes the store actually holds.
+    ///
+    /// The counter is a view of persisted state, not a tally of successful saves, so every
+    /// reload re-reads it instead of trusting an increment that a failed write could skew.
+    pub fn set_note_count(&mut self, note_count: usize) {
+        self.note_count = i32::try_from(note_count).unwrap_or(i32::MAX);
+    }
+
     pub const fn onboarding_visible(&self) -> bool {
         self.onboarding_visible
+    }
+
+    /// Index of the current question, for the progress rail the interface draws.
+    pub fn onboarding_step_index(&self) -> i32 {
+        i32::try_from(self.onboarding_step.index()).unwrap_or_default()
+    }
+
+    pub fn onboarding_can_go_back(&self) -> bool {
+        self.onboarding_step.previous().is_some()
+    }
+
+    /// Moves to the next question, or reports that the flow is ready to finish.
+    pub fn advance_onboarding(&mut self) -> OnboardingAdvance {
+        match self.onboarding_step.next() {
+            Some(step) => {
+                self.onboarding_step = step;
+                OnboardingAdvance::Moved
+            }
+            None => OnboardingAdvance::Finished,
+        }
+    }
+
+    /// Returns to the previous question; the first question has nowhere to go.
+    pub fn back_onboarding(&mut self) {
+        if let Some(step) = self.onboarding_step.previous() {
+            self.onboarding_step = step;
+        }
+    }
+
+    /// The orb face onboarding asks for, falling back to the assistant's live state.
+    pub fn onboarding_orb_state(&self) -> OrbState {
+        self.onboarding_step
+            .orb_state_id()
+            .and_then(OrbState::parse)
+            .unwrap_or(self.orb_state)
     }
 
     pub const fn window_mode(&self) -> WindowMode {
@@ -378,6 +453,22 @@ impl Controller {
 
     pub const fn active_section(&self) -> WorkspaceSection {
         self.active_section
+    }
+
+    /// Header copy for the section currently on screen.
+    pub fn section_heading(&self) -> (&'static str, String) {
+        (
+            self.active_section.title(),
+            self.active_section.subtitle(self.assistant_name()),
+        )
+    }
+
+    /// Shown wherever the routine list is empty, on Today and on Routines alike.
+    pub fn empty_routines_text(&self) -> String {
+        format!(
+            "Sin propuestas pendientes. {} seguirá observando sólo las señales que autorices.",
+            self.assistant_name()
+        )
     }
 
     pub fn navigate_to(&mut self, section: WorkspaceSection) {
@@ -410,18 +501,31 @@ impl Controller {
         self.window_mode = WindowMode::Dashboard;
     }
 
-    pub fn select_persona(&mut self, persona: PersonaChoice) {
+    /// Reopens onboarding from the first question without discarding earlier answers.
+    pub fn replay_onboarding(&mut self) {
+        self.onboarding_visible = true;
+        self.onboarding_step = OnboardingStep::Welcome;
+        self.status_text = "Repasemos tu configuracion";
+        self.orb_state = OrbState::Curious;
+    }
+
+    /// Adopts a persona while onboarding is still open, so the flow speaks in the chosen voice.
+    pub fn preview_persona(&mut self, persona: Persona) {
+        self.persona = persona;
+    }
+
+    pub fn select_persona(&mut self, persona: Persona) {
         self.persona = persona;
         self.onboarding_visible = false;
+        self.onboarding_step = OnboardingStep::Welcome;
         self.status_text = match persona {
-            PersonaChoice::Tom => "Modo profesional activado",
-            PersonaChoice::Tomy => "Modo cercano activado",
+            Persona::Tom => "Modo profesional activado",
+            Persona::Tomy => "Modo cercano activado",
         };
         self.orb_state = OrbState::Success;
     }
 
     pub fn record_note_saved(&mut self) {
-        self.note_count = self.note_count.saturating_add(1);
         self.status_text = "Nota guardada en tu memoria local";
         self.orb_state = OrbState::Success;
     }
@@ -461,8 +565,19 @@ impl Controller {
         self.orb_state = OrbState::Error;
     }
 
+    /// Reports the one configuration Tom cannot work with: no key and no local model.
+    pub fn record_missing_intelligence(&mut self) {
+        self.status_text = NO_INTELLIGENCE;
+        self.orb_state = OrbState::Warning;
+    }
+
+    pub fn record_api_key_stored(&mut self) {
+        self.status_text = "Clave guardada en Windows";
+        self.orb_state = OrbState::Success;
+    }
+
     pub fn record_api_key_cleared(&mut self) {
-        self.status_text = "API key eliminada de Windows";
+        self.status_text = "Clave eliminada de Windows";
         self.orb_state = OrbState::Success;
     }
 }
@@ -470,9 +585,13 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::{
-        AiProviderChoice, AiSettingsSubmission, Controller, NoteSubmission, OrbResizeAction,
-        OrbState, PersonaChoice, WindowMode, WorkspaceSection, anchored_orb_position,
-        centered_resize_position, translated_orb_position,
+        AiSettingsSubmission, ApiKeySubmission, Controller, NoteSubmission, OnboardingAdvance,
+        OnboardingAnswers, OrbResizeAction, OrbState, WindowMode, WorkspaceSection,
+        anchored_orb_position, centered_resize_position, translated_orb_position,
+    };
+    use tom_core::{
+        AiProvider, AiSettings, AiSetup, AssistanceStyle, OnboardingStep, Persona,
+        ProfessionalProfile,
     };
 
     #[test]
@@ -504,6 +623,24 @@ mod tests {
             WorkspaceSection::Routines.visibility(),
             (false, false, true)
         );
+    }
+
+    #[test]
+    fn section_headings_name_the_active_persona_only_where_it_belongs() {
+        let mut controller = Controller::default();
+
+        let (title, subtitle) = controller.section_heading();
+        assert_eq!(title, "Espacio de enfoque");
+        assert!(subtitle.contains("Tom"));
+
+        controller.select_persona(Persona::Tomy);
+        assert!(controller.section_heading().1.contains("Tomy"));
+        assert!(controller.empty_routines_text().contains("Tomy"));
+
+        controller.navigate_to(WorkspaceSection::Memory);
+        let (title, subtitle) = controller.section_heading();
+        assert_eq!(title, "Archivo de memoria");
+        assert!(!subtitle.contains("Tomy"));
     }
 
     #[test]
@@ -563,22 +700,28 @@ mod tests {
     }
 
     #[test]
-    fn persona_choice_accepts_ui_values_case_insensitively() {
-        assert_eq!(PersonaChoice::parse("TOMY"), PersonaChoice::Tomy);
-        assert_eq!(PersonaChoice::parse("friendly"), PersonaChoice::Tomy);
-        assert_eq!(PersonaChoice::parse("PROFESSIONAL"), PersonaChoice::Tom);
-        assert_eq!(PersonaChoice::parse("unexpected"), PersonaChoice::Tom);
-    }
-
-    #[test]
     fn selecting_a_persona_finishes_onboarding() {
         let mut controller = Controller::default();
 
-        controller.select_persona(PersonaChoice::Tomy);
+        controller.select_persona(Persona::Tomy);
 
         assert_eq!(controller.assistant_name(), "Tomy");
+        assert_eq!(controller.persona(), Persona::Tomy);
         assert!(!controller.onboarding_visible());
         assert_eq!(controller.status_text(), "Modo cercano activado");
+    }
+
+    #[test]
+    fn replaying_onboarding_restarts_the_flow_but_keeps_the_chosen_persona() {
+        let mut controller = Controller::default();
+        controller.advance_onboarding();
+        controller.select_persona(Persona::Tomy);
+
+        controller.replay_onboarding();
+
+        assert!(controller.onboarding_visible());
+        assert_eq!(controller.onboarding_step_index(), 0);
+        assert_eq!(controller.persona(), Persona::Tomy);
     }
 
     #[test]
@@ -624,8 +767,105 @@ mod tests {
                 "warning",
                 "error",
                 "sleeping",
+                "curious",
             ]
         );
+        for state in OrbState::ALL {
+            assert_eq!(OrbState::parse(state.stable_id()), Some(state));
+        }
+        assert_eq!(OrbState::parse("unknown"), None);
+    }
+
+    #[test]
+    fn onboarding_orb_hints_name_real_orb_states() {
+        for step in OnboardingStep::ALL {
+            if let Some(id) = step.orb_state_id() {
+                assert!(OrbState::parse(id).is_some(), "{id}");
+            }
+        }
+
+        let mut controller = Controller::default();
+        assert_eq!(controller.onboarding_orb_state(), OrbState::Curious);
+
+        controller.record_storage_error();
+        controller.advance_onboarding();
+        assert_eq!(controller.onboarding_orb_state(), OrbState::Error);
+    }
+
+    #[test]
+    fn onboarding_walks_forward_then_asks_to_finish() {
+        let mut controller = Controller::default();
+
+        assert!(!controller.onboarding_can_go_back());
+        assert_eq!(controller.onboarding_step_index(), 0);
+
+        for expected in 1..i32::try_from(OnboardingStep::ALL.len()).expect("five steps fit") {
+            assert_eq!(controller.advance_onboarding(), OnboardingAdvance::Moved);
+            assert_eq!(controller.onboarding_step_index(), expected);
+            assert!(controller.onboarding_can_go_back());
+        }
+
+        let last = i32::try_from(OnboardingStep::LAST.index()).expect("five steps fit");
+        assert_eq!(controller.onboarding_step_index(), last);
+        assert_eq!(controller.advance_onboarding(), OnboardingAdvance::Finished);
+        assert_eq!(controller.onboarding_step_index(), last);
+    }
+
+    #[test]
+    fn onboarding_answers_resolve_every_id_or_none_of_them() {
+        let answers = OnboardingAnswers::try_from_ui("tomy", "creator", "proactive", "local")
+            .expect("all four ids are known");
+
+        assert_eq!(answers.persona, Persona::Tomy);
+        assert_eq!(answers.professional_profile, ProfessionalProfile::Creator);
+        assert_eq!(answers.assistance_style, AssistanceStyle::Proactive);
+        assert_eq!(answers.ai_setup, AiSetup::Local);
+
+        let profile = answers.profile();
+        assert_eq!(profile.persona, Persona::Tomy);
+        assert_eq!(profile.assistance_style, AssistanceStyle::Proactive);
+    }
+
+    #[test]
+    fn an_unknown_onboarding_id_is_reported_instead_of_defaulted() {
+        assert_eq!(
+            OnboardingAnswers::try_from_ui("friendly", "creator", "proactive", "local"),
+            Err(super::UNKNOWN_PERSONA)
+        );
+        assert_eq!(
+            OnboardingAnswers::try_from_ui("tom", "gardener", "proactive", "local"),
+            Err(super::UNKNOWN_PROFILE)
+        );
+        assert_eq!(
+            OnboardingAnswers::try_from_ui("tom", "creator", "eager", "local"),
+            Err(super::UNKNOWN_ASSISTANCE)
+        );
+        assert_eq!(
+            OnboardingAnswers::try_from_ui("tom", "creator", "proactive", "someday"),
+            Err(super::UNKNOWN_AI_SETUP)
+        );
+    }
+
+    #[test]
+    fn previewing_a_persona_changes_the_voice_without_closing_onboarding() {
+        let mut controller = Controller::default();
+
+        controller.preview_persona(Persona::Tomy);
+
+        assert_eq!(controller.assistant_name(), "Tomy");
+        assert!(controller.onboarding_visible());
+    }
+
+    #[test]
+    fn going_back_stops_at_the_first_question() {
+        let mut controller = Controller::default();
+
+        controller.back_onboarding();
+        assert_eq!(controller.onboarding_step_index(), 0);
+
+        controller.advance_onboarding();
+        controller.back_onboarding();
+        assert_eq!(controller.onboarding_step_index(), 0);
     }
 
     #[test]
@@ -654,16 +894,20 @@ mod tests {
     }
 
     #[test]
-    fn recording_a_saved_note_updates_count_and_status() {
+    fn the_note_counter_mirrors_the_store_rather_than_the_saves() {
         let mut controller = Controller::default();
 
         controller.record_note_saved();
+        controller.set_note_count(7);
 
-        assert_eq!(controller.note_count(), 1);
+        assert_eq!(controller.note_count(), 7);
         assert_eq!(
             controller.status_text(),
             "Nota guardada en tu memoria local"
         );
+
+        controller.set_note_count(usize::MAX);
+        assert_eq!(controller.note_count(), i32::MAX);
     }
 
     #[test]
@@ -691,7 +935,7 @@ mod tests {
 
     #[test]
     fn restored_state_skips_onboarding_and_caps_large_note_counts() {
-        let controller = Controller::restored(PersonaChoice::Tomy, usize::MAX);
+        let controller = Controller::restored(Persona::Tomy, usize::MAX);
 
         assert_eq!(controller.assistant_name(), "Tomy");
         assert!(!controller.onboarding_visible());
@@ -699,48 +943,105 @@ mod tests {
     }
 
     #[test]
-    fn ai_provider_ids_round_trip_and_unknown_values_are_rejected() {
-        let providers = [
-            AiProviderChoice::Disabled,
-            AiProviderChoice::OpenAi,
-            AiProviderChoice::Anthropic,
-            AiProviderChoice::Gemini,
-            AiProviderChoice::CustomCloud,
-            AiProviderChoice::Ollama,
-            AiProviderChoice::LmStudio,
-            AiProviderChoice::CustomLocal,
-        ];
+    fn saving_a_connection_never_demands_a_credential() {
+        let submission =
+            AiSettingsSubmission::try_from_ui("openai", " https://api.openai.com/v1 ", " ")
+                .expect("no key is required to save a connection");
 
-        for provider in providers {
-            assert_eq!(
-                AiProviderChoice::parse(provider.stable_id()),
-                Some(provider)
-            );
-        }
-        assert_eq!(AiProviderChoice::parse("unknown"), None);
+        assert_eq!(submission.provider, AiProvider::OpenAi);
+        assert_eq!(submission.endpoint, "https://api.openai.com/v1");
+        assert_eq!(submission.model_path, "");
+
+        AiSettingsSubmission::try_from_ui("anthropic", "", "")
+            .expect("a cloud provider saves fine with no key stored yet");
+        AiSettingsSubmission::try_from_ui("ollama", "", "")
+            .expect("a local provider saves fine too");
     }
 
     #[test]
-    fn empty_api_key_preserves_an_existing_credential() {
-        let submission = AiSettingsSubmission::try_from_ui(
-            "openai",
-            "   ",
-            " https://api.openai.com/v1 ",
-            " ",
-            true,
-        )
-        .expect("existing key should satisfy cloud provider");
+    fn custom_providers_still_need_somewhere_to_connect() {
+        assert_eq!(
+            AiSettingsSubmission::try_from_ui("custom-cloud", "", ""),
+            Err("Configura el endpoint del proveedor")
+        );
+        assert_eq!(
+            AiSettingsSubmission::try_from_ui("custom-local", "", ""),
+            Err("Configura un endpoint o modelo local")
+        );
+    }
 
-        assert_eq!(submission.provider, AiProviderChoice::OpenAi);
-        assert_eq!(submission.new_api_key, None);
-        assert_eq!(submission.endpoint, "https://api.openai.com/v1");
+    #[test]
+    fn an_unknown_provider_is_rejected_instead_of_falling_back() {
+        assert_eq!(
+            AiSettingsSubmission::try_from_ui("gpt-9", "", ""),
+            Err(super::UNKNOWN_PROVIDER)
+        );
+    }
+
+    #[test]
+    fn disabled_provider_discards_non_secret_locations() {
+        let submission =
+            AiSettingsSubmission::try_from_ui("disabled", "http://unused", "unused.gguf")
+                .expect("disabled is always valid");
+
+        assert_eq!(submission.endpoint, "");
         assert_eq!(submission.model_path, "");
     }
 
     #[test]
-    fn ai_submission_debug_output_redacts_the_api_key() {
-        let submission = AiSettingsSubmission::try_from_ui("openai", "super-secret", "", "", false)
-            .expect("submission should be valid");
+    fn one_way_in_is_enough_and_none_is_what_stops_tom() {
+        let nothing = AiSettings::default();
+        assert!(!nothing.intelligence_is_available(0));
+
+        // A single key, from any provider, is enough on its own.
+        assert!(nothing.intelligence_is_available(1));
+
+        // So is a local model, with no key stored anywhere.
+        let local = AiSettings {
+            provider: AiProvider::Ollama,
+            endpoint: "http://127.0.0.1:11434".to_owned(),
+            model_path: String::new(),
+        };
+        assert!(local.has_reachable_local_model());
+        assert!(local.intelligence_is_available(0));
+
+        // A local provider that names nowhere is not a way in.
+        let unreachable = AiSettings {
+            provider: AiProvider::Ollama,
+            endpoint: "   ".to_owned(),
+            model_path: String::new(),
+        };
+        assert!(!unreachable.has_reachable_local_model());
+        assert!(!unreachable.intelligence_is_available(0));
+
+        // A cloud provider is never a way in by itself; its key is.
+        let cloud = AiSettings {
+            provider: AiProvider::OpenAi,
+            endpoint: "https://api.openai.com/v1".to_owned(),
+            model_path: String::new(),
+        };
+        assert!(!cloud.has_reachable_local_model());
+        assert!(!cloud.intelligence_is_available(0));
+        assert!(cloud.intelligence_is_available(1));
+    }
+
+    #[test]
+    fn having_no_way_in_is_reported_to_the_user() {
+        let mut controller = Controller::default();
+
+        controller.record_missing_intelligence();
+
+        assert_eq!(controller.status_text(), super::NO_INTELLIGENCE);
+        assert_eq!(controller.orb_state(), OrbState::Warning);
+    }
+
+    #[test]
+    fn a_key_submission_keeps_the_pasted_value_and_hides_it_from_logs() {
+        let submission = ApiKeySubmission::try_from_ui("anthropic", "  super-secret  ")
+            .expect("a pasted key is valid");
+
+        assert_eq!(submission.provider, AiProvider::Anthropic);
+        assert_eq!(submission.api_key, "super-secret");
 
         let debug = format!("{submission:?}");
         assert!(!debug.contains("super-secret"));
@@ -748,43 +1049,27 @@ mod tests {
     }
 
     #[test]
-    fn cloud_provider_requires_a_new_or_existing_api_key() {
+    fn a_key_submission_refuses_blanks_and_providers_that_take_no_key() {
         assert_eq!(
-            AiSettingsSubmission::try_from_ui("anthropic", "", "", "", false),
-            Err("Agrega una API key para el proveedor cloud")
-        );
-
-        let submission = AiSettingsSubmission::try_from_ui("gemini", "secret", "", "", false)
-            .expect("new key should satisfy cloud provider");
-        assert_eq!(submission.new_api_key.as_deref(), Some("secret"));
-    }
-
-    #[test]
-    fn custom_providers_require_a_location() {
-        assert_eq!(
-            AiSettingsSubmission::try_from_ui("custom-cloud", "secret", "", "", false),
-            Err("Configura el endpoint del proveedor")
+            ApiKeySubmission::try_from_ui("openai", "   "),
+            Err(super::EMPTY_API_KEY)
         );
         assert_eq!(
-            AiSettingsSubmission::try_from_ui("custom-local", "", "", "", false),
-            Err("Configura un endpoint o modelo local")
+            ApiKeySubmission::try_from_ui("disabled", "secret"),
+            Err(super::PROVIDER_WITHOUT_KEY)
+        );
+        assert_eq!(
+            ApiKeySubmission::try_from_ui("gpt-9", "secret"),
+            Err(super::UNKNOWN_PROVIDER)
         );
     }
 
     #[test]
-    fn disabled_provider_discards_non_secret_locations() {
-        let submission = AiSettingsSubmission::try_from_ui(
-            "disabled",
-            "",
-            "http://unused",
-            "unused.gguf",
-            false,
-        )
-        .expect("disabled is always valid");
+    fn a_local_provider_may_still_hold_an_optional_key() {
+        let submission = ApiKeySubmission::try_from_ui("lm-studio", "proxy-token")
+            .expect("local servers behind a proxy can carry a token");
 
-        assert_eq!(submission.endpoint, "");
-        assert_eq!(submission.model_path, "");
-        assert_eq!(submission.new_api_key, None);
+        assert_eq!(submission.provider, AiProvider::LmStudio);
     }
 
     #[test]
@@ -806,7 +1091,10 @@ mod tests {
             "No pudimos acceder al almacen seguro de Windows"
         );
 
+        controller.record_api_key_stored();
+        assert_eq!(controller.status_text(), "Clave guardada en Windows");
+
         controller.record_api_key_cleared();
-        assert_eq!(controller.status_text(), "API key eliminada de Windows");
+        assert_eq!(controller.status_text(), "Clave eliminada de Windows");
     }
 }

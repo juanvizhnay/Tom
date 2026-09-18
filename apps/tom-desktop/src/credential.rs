@@ -1,3 +1,5 @@
+use tom_core::{AiProvider, api_key_providers};
+
 pub const SERVICE_NAME: &str = "com.tom.assistant.ai";
 
 #[derive(Debug)]
@@ -41,37 +43,76 @@ impl CredentialVault for WindowsCredentialVault {
     }
 }
 
-pub fn persist_api_key<V: CredentialVault>(
-    vault: &V,
-    provider_id: &str,
-    new_api_key: Option<&str>,
-) -> Result<bool, CredentialError> {
-    if let Some(api_key) = new_api_key {
-        vault.set_key(provider_id, api_key)?;
-        Ok(true)
-    } else {
-        vault.has_key(provider_id)
-    }
+/// Whether one provider currently holds a credential.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApiKeyStatus {
+    pub provider: AiProvider,
+    pub stored: bool,
 }
 
-pub fn clear_api_key<V: CredentialVault>(
+/// Reads which providers hold a credential right now.
+///
+/// Keys live one per provider, so this is the only place that decides what the manager
+/// shows as saved: nothing is inferred from the provider that happens to be selected.
+pub fn read_key_inventory<V: CredentialVault>(
+    vault: &V,
+) -> Result<Vec<ApiKeyStatus>, CredentialError> {
+    api_key_providers()
+        .into_iter()
+        .map(|provider| {
+            vault
+                .has_key(provider.stable_id())
+                .map(|stored| ApiKeyStatus { provider, stored })
+        })
+        .collect()
+}
+
+/// Writes one provider's credential, replacing only that provider's key.
+///
+/// Adding a second provider never disturbs the first: the vault is keyed by provider id.
+pub fn store_api_key<V: CredentialVault>(
     vault: &V,
     provider_id: &str,
-) -> Result<bool, CredentialError> {
-    vault.clear_key(provider_id)?;
-    Ok(false)
+    api_key: &str,
+) -> Result<(), CredentialError> {
+    vault.set_key(provider_id, api_key)
+}
+
+/// Removes one provider's credential, and only when the user asks for it.
+///
+/// Deleting a key that is not there succeeds, so a stale interface cannot raise an error.
+pub fn forget_api_key<V: CredentialVault>(
+    vault: &V,
+    provider_id: &str,
+) -> Result<(), CredentialError> {
+    vault.clear_key(provider_id)
 }
 
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, collections::HashSet};
 
-    use super::{CredentialError, CredentialVault, SERVICE_NAME, clear_api_key, persist_api_key};
+    use super::{
+        ApiKeyStatus, CredentialError, CredentialVault, SERVICE_NAME, forget_api_key,
+        read_key_inventory, store_api_key,
+    };
+    use tom_core::{AiProvider, api_key_providers};
 
     #[derive(Default)]
     struct FakeVault {
         keys: RefCell<HashSet<String>>,
         writes: RefCell<Vec<(String, String)>>,
+        deletes: RefCell<Vec<String>>,
+    }
+
+    impl FakeVault {
+        fn with_keys(provider_ids: &[&str]) -> Self {
+            let vault = Self::default();
+            for provider_id in provider_ids {
+                vault.keys.borrow_mut().insert((*provider_id).to_owned());
+            }
+            vault
+        }
     }
 
     impl CredentialVault for FakeVault {
@@ -89,6 +130,7 @@ mod tests {
 
         fn clear_key(&self, provider_id: &str) -> Result<(), CredentialError> {
             self.keys.borrow_mut().remove(provider_id);
+            self.deletes.borrow_mut().push(provider_id.to_owned());
             Ok(())
         }
     }
@@ -99,36 +141,65 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_submission_preserves_the_existing_key_without_writing() {
-        let vault = FakeVault::default();
-        vault.keys.borrow_mut().insert("openai".into());
+    fn adding_a_key_leaves_every_other_provider_untouched() {
+        let vault = FakeVault::with_keys(&["openai"]);
 
-        let has_key = persist_api_key(&vault, "openai", None).expect("lookup should work");
+        store_api_key(&vault, "anthropic", "anthropic-secret").expect("write should work");
 
-        assert!(has_key);
-        assert!(vault.writes.borrow().is_empty());
+        let inventory = read_key_inventory(&vault).expect("inventory should work");
+        let stored = stored_providers(&inventory);
+        assert!(stored.contains(&AiProvider::OpenAi));
+        assert!(stored.contains(&AiProvider::Anthropic));
+        assert_eq!(stored.len(), 2);
+        assert!(vault.deletes.borrow().is_empty());
     }
 
     #[test]
-    fn a_new_key_is_written_under_the_provider_id() {
-        let vault = FakeVault::default();
+    fn the_inventory_covers_every_provider_that_accepts_a_key() {
+        let vault = FakeVault::with_keys(&["gemini", "lm-studio"]);
 
-        let has_key =
-            persist_api_key(&vault, "gemini", Some("secret-value")).expect("write should work");
+        let inventory = read_key_inventory(&vault).expect("inventory should work");
 
-        assert!(has_key);
+        assert_eq!(inventory.len(), api_key_providers().len());
         assert_eq!(
-            vault.writes.into_inner(),
-            vec![("gemini".into(), "secret-value".into())]
+            stored_providers(&inventory),
+            vec![AiProvider::Gemini, AiProvider::LmStudio]
+        );
+        assert!(
+            !inventory
+                .iter()
+                .any(|status| status.provider == AiProvider::Disabled)
         );
     }
 
     #[test]
-    fn clearing_a_key_is_idempotent_and_reports_no_key() {
-        let vault = FakeVault::default();
-        vault.keys.borrow_mut().insert("anthropic".into());
+    fn forgetting_a_key_removes_only_that_provider_and_repeats_cleanly() {
+        let vault = FakeVault::with_keys(&["openai", "anthropic"]);
 
-        assert!(!clear_api_key(&vault, "anthropic").expect("delete should work"));
-        assert!(!clear_api_key(&vault, "anthropic").expect("repeat delete should work"));
+        forget_api_key(&vault, "anthropic").expect("delete should work");
+        forget_api_key(&vault, "anthropic").expect("repeat delete should work");
+
+        let inventory = read_key_inventory(&vault).expect("inventory should work");
+        assert_eq!(stored_providers(&inventory), vec![AiProvider::OpenAi]);
+    }
+
+    #[test]
+    fn a_stored_key_is_written_verbatim_under_its_provider_id() {
+        let vault = FakeVault::default();
+
+        store_api_key(&vault, "custom-local", "local-token").expect("write should work");
+
+        assert_eq!(
+            vault.writes.into_inner(),
+            vec![("custom-local".into(), "local-token".into())]
+        );
+    }
+
+    fn stored_providers(inventory: &[ApiKeyStatus]) -> Vec<AiProvider> {
+        inventory
+            .iter()
+            .filter(|status| status.stored)
+            .map(|status| status.provider)
+            .collect()
     }
 }

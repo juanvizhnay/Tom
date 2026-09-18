@@ -16,6 +16,18 @@ pub enum AiProvider {
 }
 
 impl AiProvider {
+    /// Every provider the assistant knows about, in the order the interface offers them.
+    pub const ALL: [Self; 8] = [
+        Self::Disabled,
+        Self::OpenAi,
+        Self::Anthropic,
+        Self::Gemini,
+        Self::CustomCloud,
+        Self::Ollama,
+        Self::LmStudio,
+        Self::CustomLocal,
+    ];
+
     #[must_use]
     pub const fn stable_id(self) -> &'static str {
         match self {
@@ -32,17 +44,46 @@ impl AiProvider {
 
     #[must_use]
     pub fn from_stable_id(stable_id: &str) -> Option<Self> {
-        match stable_id {
-            "disabled" => Some(Self::Disabled),
-            "openai" => Some(Self::OpenAi),
-            "anthropic" => Some(Self::Anthropic),
-            "gemini" => Some(Self::Gemini),
-            "custom-cloud" => Some(Self::CustomCloud),
-            "ollama" => Some(Self::Ollama),
-            "lm-studio" => Some(Self::LmStudio),
-            "custom-local" => Some(Self::CustomLocal),
-            _ => None,
-        }
+        Self::ALL
+            .into_iter()
+            .find(|provider| provider.stable_id() == stable_id)
+    }
+
+    /// Whether the provider runs outside this device and therefore needs a credential.
+    #[must_use]
+    pub const fn is_cloud(self) -> bool {
+        matches!(
+            self,
+            Self::OpenAi | Self::Anthropic | Self::Gemini | Self::CustomCloud
+        )
+    }
+
+    /// Whether the provider is expected to answer on this machine.
+    #[must_use]
+    pub const fn is_local(self) -> bool {
+        matches!(self, Self::Ollama | Self::LmStudio | Self::CustomLocal)
+    }
+
+    /// Whether a credential can be stored for the provider.
+    ///
+    /// No single key is ever required: a cloud provider is reached with one, a local server
+    /// may want one if it sits behind a proxy, and the vault holds whichever the user
+    /// chooses to add.
+    #[must_use]
+    pub const fn accepts_api_key(self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+
+    /// Whether the user must supply an endpoint before the provider can be reached.
+    #[must_use]
+    pub const fn requires_endpoint(self) -> bool {
+        matches!(self, Self::CustomCloud)
+    }
+
+    /// Whether the provider needs either an endpoint or a model path to be usable.
+    #[must_use]
+    pub const fn requires_model_location(self) -> bool {
+        matches!(self, Self::CustomLocal)
     }
 }
 
@@ -53,6 +94,25 @@ pub struct AiSettings {
     pub model_path: String,
 }
 
+impl AiSettings {
+    /// Whether a local model is described well enough for Tom to reach it.
+    #[must_use]
+    pub fn has_reachable_local_model(&self) -> bool {
+        self.provider.is_local()
+            && (!self.endpoint.trim().is_empty() || !self.model_path.trim().is_empty())
+    }
+
+    /// Whether Tom has any way at all to think.
+    ///
+    /// Nothing in particular is required: one stored key, from any provider, or one local
+    /// model it can reach, is enough. Having none of either is the single configuration
+    /// Tom cannot work with, and the interface says so rather than failing quietly.
+    #[must_use]
+    pub fn intelligence_is_available(&self, stored_key_count: usize) -> bool {
+        stored_key_count > 0 || self.has_reachable_local_model()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Persona {
     #[default]
@@ -61,12 +121,29 @@ pub enum Persona {
 }
 
 impl Persona {
+    pub const ALL: [Self; 2] = [Self::Tom, Self::Tomy];
+
     #[must_use]
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::Tom => "Tom",
             Self::Tomy => "Tomy",
         }
+    }
+
+    #[must_use]
+    pub const fn stable_id(self) -> &'static str {
+        match self {
+            Self::Tom => "tom",
+            Self::Tomy => "tomy",
+        }
+    }
+
+    #[must_use]
+    pub fn from_stable_id(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|persona| persona.stable_id() == value)
     }
 }
 
@@ -81,6 +158,14 @@ pub enum ProfessionalProfile {
 }
 
 impl ProfessionalProfile {
+    pub const ALL: [Self; 5] = [
+        Self::Developer,
+        Self::Office,
+        Self::Student,
+        Self::Creator,
+        Self::General,
+    ];
+
     #[must_use]
     pub const fn stable_id(self) -> &'static str {
         match self {
@@ -94,14 +179,9 @@ impl ProfessionalProfile {
 
     #[must_use]
     pub fn from_stable_id(value: &str) -> Option<Self> {
-        match value {
-            "developer" => Some(Self::Developer),
-            "office" => Some(Self::Office),
-            "student" => Some(Self::Student),
-            "creator" => Some(Self::Creator),
-            "general" => Some(Self::General),
-            _ => None,
-        }
+        Self::ALL
+            .into_iter()
+            .find(|profile| profile.stable_id() == value)
     }
 }
 
@@ -114,6 +194,8 @@ pub enum AssistanceStyle {
 }
 
 impl AssistanceStyle {
+    pub const ALL: [Self; 3] = [Self::Focused, Self::Balanced, Self::Proactive];
+
     #[must_use]
     pub const fn stable_id(self) -> &'static str {
         match self {
@@ -125,12 +207,9 @@ impl AssistanceStyle {
 
     #[must_use]
     pub fn from_stable_id(value: &str) -> Option<Self> {
-        match value {
-            "focused" => Some(Self::Focused),
-            "balanced" => Some(Self::Balanced),
-            "proactive" => Some(Self::Proactive),
-            _ => None,
-        }
+        Self::ALL
+            .into_iter()
+            .find(|style| style.stable_id() == value)
     }
 }
 

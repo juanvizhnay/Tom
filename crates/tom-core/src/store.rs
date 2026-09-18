@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -8,6 +8,9 @@ use uuid::Uuid;
 use crate::{
     AiProvider, AiSettings, AssistanceStyle, Note, Persona, ProfessionalProfile, UserProfile,
 };
+
+/// How long a statement waits for a lock before giving up.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -59,6 +62,15 @@ impl MemoryStore {
     }
 
     fn from_connection(connection: Connection) -> Result<Self, StoreError> {
+        // A desktop store is opened once and used from the UI thread, but the assistant is
+        // meant to grow background work: WAL keeps a future reader from blocking a write,
+        // and a busy timeout turns a momentary lock into a short wait instead of an error.
+        connection.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;",
+        )?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS notes (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -147,12 +159,14 @@ impl MemoryStore {
             return self.list_notes();
         }
 
+        // `LIKE` ignores collating sequences, so a trailing `COLLATE NOCASE` would attach to
+        // the escape character and change nothing; SQLite's `LIKE` already folds ASCII case.
         let pattern = format!("%{}%", escape_like(query));
         self.query_notes(
             "SELECT id, title, body, created_at, updated_at
              FROM notes
-             WHERE title LIKE ?1 ESCAPE '\\' COLLATE NOCASE
-                OR body LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+             WHERE title LIKE ?1 ESCAPE '\\'
+                OR body LIKE ?1 ESCAPE '\\'
              ORDER BY created_at DESC, id DESC",
             Some(&pattern),
         )
@@ -172,7 +186,7 @@ impl MemoryStore {
                  professional_profile = excluded.professional_profile,
                  assistance_style = excluded.assistance_style",
             params![
-                persona_to_str(profile.persona),
+                profile.persona.stable_id(),
                 profile.professional_profile.stable_id(),
                 profile.assistance_style.stable_id(),
             ],
@@ -205,8 +219,12 @@ impl MemoryStore {
         stored
             .map(|(persona, professional_profile, assistance_style)| {
                 Ok(UserProfile {
-                    persona: parse_persona(&persona)?,
-                    professional_profile: parse_professional_profile(&professional_profile)?,
+                    persona: Persona::from_stable_id(&persona)
+                        .ok_or(StoreError::UnknownPersona(persona))?,
+                    professional_profile: ProfessionalProfile::from_stable_id(
+                        &professional_profile,
+                    )
+                    .ok_or(StoreError::UnknownProfessionalProfile(professional_profile))?,
                     assistance_style: AssistanceStyle::from_stable_id(&assistance_style)
                         .ok_or(StoreError::UnknownAssistanceStyle(assistance_style))?,
                 })
@@ -317,34 +335,14 @@ fn parse_timestamp(value: String) -> Result<DateTime<Utc>, StoreError> {
         .map_err(|source| StoreError::InvalidTimestamp { value, source })
 }
 
-const fn persona_to_str(persona: Persona) -> &'static str {
-    match persona {
-        Persona::Tom => "tom",
-        Persona::Tomy => "tomy",
-    }
-}
-
-fn parse_persona(value: &str) -> Result<Persona, StoreError> {
-    match value {
-        "tom" => Ok(Persona::Tom),
-        "tomy" => Ok(Persona::Tomy),
-        _ => Err(StoreError::UnknownPersona(value.to_owned())),
-    }
-}
-
-fn parse_professional_profile(value: &str) -> Result<ProfessionalProfile, StoreError> {
-    ProfessionalProfile::from_stable_id(value)
-        .ok_or_else(|| StoreError::UnknownProfessionalProfile(value.to_owned()))
-}
-
+/// Neutralizes the wildcards a user can type so a search stays a literal search.
 fn escape_like(query: &str) -> String {
-    query
-        .chars()
-        .flat_map(|character| match character {
-            '%' => ['\\', '%'].into_iter().take(2),
-            '_' => ['\\', '_'].into_iter().take(2),
-            '\\' => ['\\', '\\'].into_iter().take(2),
-            _ => [character, '\0'].into_iter().take(1),
-        })
-        .collect()
+    let mut escaped = String::with_capacity(query.len());
+    for character in query.chars() {
+        if matches!(character, '%' | '_' | '\\') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }

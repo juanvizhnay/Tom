@@ -41,7 +41,7 @@ The main application currently includes:
 - **Today** — quick note capture and an activity pulse with explainable suggestions.
 - **Memory** — a local view of what Tom remembers.
 - **Routines** — suggestions that can be accepted or dismissed explicitly.
-- **Settings** — personality, profession, initiative level, provider metadata, and secure API-key management.
+- **Settings** — personality, profession, initiative level, and provider metadata, plus a key manager that adds and removes one credential per provider.
 - **Orb mode** — a compact window that can be dragged anywhere, resized from 96 to 288 pixels, and restored to the full dashboard.
 
 ## Technology
@@ -88,7 +88,11 @@ The first launch opens the onboarding flow. Runtime data is created in the opera
 
 ## AI configuration
 
-Tom's settings support provider metadata, custom endpoints, model names, and local model paths. API keys are stored separately in the operating system's credential vault.
+Tom's settings support provider metadata, custom endpoints, model names, and local model paths. API keys are stored separately in the operating system's credential vault, one entry per provider.
+
+The **Claves guardadas** tab is the only place credentials are touched. Keys are added and removed one provider at a time: storing a key for a second provider never disturbs the first, and nothing is deleted unless you press its delete button.
+
+No individual key is required. Tom needs exactly one way in: a single stored key, from any provider, or a local model it can reach. With none of either it cannot think, and it says so in the settings panel and in the status line rather than failing when a request is made.
 
 The configuration layer is implemented, but Tom does **not** send inference requests yet. Network clients and local-model execution will be added as explicit, optional capabilities so users remain in control of when data leaves their device.
 
