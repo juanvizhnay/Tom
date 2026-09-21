@@ -7,6 +7,9 @@ pub struct CredentialError;
 
 pub trait CredentialVault {
     fn has_key(&self, provider_id: &str) -> Result<bool, CredentialError>;
+    /// Reads the credential itself. Call only when it is about to be sent; prefer
+    /// [`CredentialVault::has_key`] wherever presence is all that matters.
+    fn read_key(&self, provider_id: &str) -> Result<Option<String>, CredentialError>;
     fn set_key(&self, provider_id: &str, api_key: &str) -> Result<(), CredentialError>;
     fn clear_key(&self, provider_id: &str) -> Result<(), CredentialError>;
 }
@@ -25,6 +28,14 @@ impl CredentialVault for WindowsCredentialVault {
         match Self::entry(provider_id)?.get_password() {
             Ok(_) => Ok(true),
             Err(keyring::Error::NoEntry) => Ok(false),
+            Err(_) => Err(CredentialError),
+        }
+    }
+
+    fn read_key(&self, provider_id: &str) -> Result<Option<String>, CredentialError> {
+        match Self::entry(provider_id)?.get_password() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(CredentialError),
         }
     }
@@ -120,6 +131,16 @@ mod tests {
             Ok(self.keys.borrow().contains(provider_id))
         }
 
+        fn read_key(&self, provider_id: &str) -> Result<Option<String>, CredentialError> {
+            Ok(self
+                .writes
+                .borrow()
+                .iter()
+                .rev()
+                .find(|(id, _)| id == provider_id)
+                .map(|(_, secret)| secret.clone()))
+        }
+
         fn set_key(&self, provider_id: &str, api_key: &str) -> Result<(), CredentialError> {
             self.keys.borrow_mut().insert(provider_id.to_owned());
             self.writes
@@ -181,6 +202,18 @@ mod tests {
 
         let inventory = read_key_inventory(&vault).expect("inventory should work");
         assert_eq!(stored_providers(&inventory), vec![AiProvider::OpenAi]);
+    }
+
+    #[test]
+    fn a_key_can_be_read_back_only_for_the_provider_it_was_stored_under() {
+        let vault = FakeVault::default();
+        store_api_key(&vault, "openai", "sk-one").expect("write should work");
+
+        assert_eq!(
+            vault.read_key("openai").expect("read should work"),
+            Some("sk-one".to_owned())
+        );
+        assert_eq!(vault.read_key("anthropic").expect("read should work"), None);
     }
 
     #[test]

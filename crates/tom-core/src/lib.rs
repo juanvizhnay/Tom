@@ -1,12 +1,17 @@
 #![forbid(unsafe_code)]
 
 mod catalog;
+mod inference;
 mod model;
 mod store;
 
 pub use catalog::{
     AiSetup, Choice, OnboardingStep, PulseEntry, PulseTone, api_key_providers,
     cloud_provider_choices, local_provider_choices, pulse_timeline, welcome_highlights,
+};
+pub use inference::{
+    ChatRequest, ChatRole, ChatTurn, InferenceError, WireFormat, build_chat_request,
+    parse_chat_response, parse_error_message, system_prompt,
 };
 pub use model::{
     AiProvider, AiSettings, AssistanceStyle, Note, Persona, ProfessionalProfile, RoutineSuggestion,

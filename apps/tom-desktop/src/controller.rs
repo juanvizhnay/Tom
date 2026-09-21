@@ -1,5 +1,6 @@
 use tom_core::{
-    AiProvider, AiSetup, AssistanceStyle, OnboardingStep, Persona, ProfessionalProfile, UserProfile,
+    AiProvider, AiSetup, AssistanceStyle, ChatTurn, OnboardingStep, Persona, ProfessionalProfile,
+    UserProfile,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -82,16 +83,23 @@ impl OrbResizeAction {
 pub enum WorkspaceSection {
     #[default]
     Today,
+    Conversation,
     Memory,
     Routines,
 }
 
 impl WorkspaceSection {
-    pub const ALL: [Self; 3] = [Self::Today, Self::Memory, Self::Routines];
+    pub const ALL: [Self; 4] = [
+        Self::Today,
+        Self::Conversation,
+        Self::Memory,
+        Self::Routines,
+    ];
 
     pub const fn stable_id(self) -> &'static str {
         match self {
             Self::Today => "today",
+            Self::Conversation => "conversation",
             Self::Memory => "memory",
             Self::Routines => "routines",
         }
@@ -103,9 +111,11 @@ impl WorkspaceSection {
             .find(|section| section.stable_id() == value)
     }
 
-    pub const fn visibility(self) -> (bool, bool, bool) {
+    /// Which page is on screen, in the order the interface declares them.
+    pub const fn visibility(self) -> (bool, bool, bool, bool) {
         (
             matches!(self, Self::Today),
+            matches!(self, Self::Conversation),
             matches!(self, Self::Memory),
             matches!(self, Self::Routines),
         )
@@ -115,6 +125,7 @@ impl WorkspaceSection {
     pub const fn title(self) -> &'static str {
         match self {
             Self::Today => "Espacio de enfoque",
+            Self::Conversation => "Conversacion",
             Self::Memory => "Archivo de memoria",
             Self::Routines => "Rutinas explicables",
         }
@@ -124,9 +135,32 @@ impl WorkspaceSection {
     pub fn subtitle(self, assistant_name: &str) -> String {
         match self {
             Self::Today => format!("Captura lo importante. {assistant_name} mantiene el hilo."),
+            Self::Conversation => {
+                format!(
+                    "Lo que le digas a {assistant_name} sale de este equipo hacia el proveedor que elegiste."
+                )
+            }
             Self::Memory => "Decisiones y contexto que tú controlas.".to_owned(),
             Self::Routines => "Revisa la evidencia antes de activar cualquier ayuda.".to_owned(),
         }
+    }
+}
+
+/// A question the user asked, once it is worth sending.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ChatSubmission {
+    pub question: String,
+}
+
+impl ChatSubmission {
+    pub fn try_from_ui(question: &str) -> Result<Self, &'static str> {
+        let question = question.trim();
+        if question.is_empty() {
+            return Err(EMPTY_QUESTION);
+        }
+        Ok(Self {
+            question: question.to_owned(),
+        })
     }
 }
 
@@ -265,6 +299,7 @@ pub const UNKNOWN_ASSISTANCE: &str = "Nivel de iniciativa no reconocido";
 pub const UNKNOWN_PERSONA: &str = "Personalidad no reconocida";
 pub const UNKNOWN_AI_SETUP: &str = "Opcion de inteligencia no reconocida";
 pub const EMPTY_API_KEY: &str = "Pega una clave antes de guardarla";
+pub const EMPTY_QUESTION: &str = "Escribe algo antes de enviarlo";
 pub const PROVIDER_WITHOUT_KEY: &str = "Este proveedor no usa claves";
 /// Shown whenever Tom has neither a stored key nor a local model it can reach.
 pub const NO_INTELLIGENCE: &str = "Tom no puede pensar: anade una clave o un modelo local";
@@ -342,7 +377,9 @@ pub enum OnboardingAdvance {
 #[derive(Debug)]
 pub struct Controller {
     persona: Persona,
-    status_text: &'static str,
+    conversation: Vec<ChatTurn>,
+    awaiting_reply: bool,
+    status_text: String,
     note_count: i32,
     onboarding_visible: bool,
     onboarding_step: OnboardingStep,
@@ -356,7 +393,9 @@ impl Default for Controller {
     fn default() -> Self {
         Self {
             persona: Persona::Tom,
-            status_text: "Listo para ayudarte",
+            conversation: Vec::new(),
+            awaiting_reply: false,
+            status_text: "Listo para ayudarte".to_owned(),
             note_count: 0,
             onboarding_visible: true,
             onboarding_step: OnboardingStep::Welcome,
@@ -372,7 +411,7 @@ impl Controller {
     pub fn restored(persona: Persona, note_count: usize) -> Self {
         let mut controller = Self {
             persona,
-            status_text: "Memoria local sincronizada",
+            status_text: "Memoria local sincronizada".to_owned(),
             onboarding_visible: false,
             ..Self::default()
         };
@@ -388,8 +427,13 @@ impl Controller {
         self.persona.display_name()
     }
 
-    pub const fn status_text(&self) -> &'static str {
-        self.status_text
+    pub fn status_text(&self) -> &str {
+        &self.status_text
+    }
+
+    /// Replaces the status line, reusing the buffer already allocated for it.
+    fn set_status(&mut self, text: &str) {
+        text.clone_into(&mut self.status_text);
     }
 
     pub const fn note_count(&self) -> i32 {
@@ -505,7 +549,7 @@ impl Controller {
     pub fn replay_onboarding(&mut self) {
         self.onboarding_visible = true;
         self.onboarding_step = OnboardingStep::Welcome;
-        self.status_text = "Repasemos tu configuracion";
+        self.set_status("Repasemos tu configuracion");
         self.orb_state = OrbState::Curious;
     }
 
@@ -518,66 +562,111 @@ impl Controller {
         self.persona = persona;
         self.onboarding_visible = false;
         self.onboarding_step = OnboardingStep::Welcome;
-        self.status_text = match persona {
+        self.set_status(match persona {
             Persona::Tom => "Modo profesional activado",
             Persona::Tomy => "Modo cercano activado",
-        };
+        });
         self.orb_state = OrbState::Success;
     }
 
+    /// The exchange so far, oldest first, exactly as it will be sent to the provider.
+    pub fn conversation(&self) -> &[ChatTurn] {
+        &self.conversation
+    }
+
+    /// Whether a reply is still in flight.
+    pub const fn awaiting_reply(&self) -> bool {
+        self.awaiting_reply
+    }
+
+    /// Records the question and marks the assistant as thinking.
+    ///
+    /// The question joins the transcript immediately so it is sent with the request and
+    /// stays on screen whatever the answer turns out to be.
+    pub fn begin_exchange(&mut self, question: String) {
+        self.conversation.push(ChatTurn::user(question));
+        self.awaiting_reply = true;
+        self.set_status("Pensando...");
+        self.orb_state = OrbState::Thinking;
+    }
+
+    pub fn record_reply(&mut self, reply: String) {
+        self.conversation.push(ChatTurn::assistant(reply));
+        self.awaiting_reply = false;
+        self.set_status("Respuesta lista");
+        self.orb_state = OrbState::Success;
+    }
+
+    /// Reports a failed exchange without inventing a reply for it.
+    ///
+    /// The question stays in the transcript so it can be retried; only the assistant turn
+    /// is missing, which is the truth of what happened.
+    pub fn record_inference_error(&mut self, message: String) {
+        self.awaiting_reply = false;
+        self.status_text = message;
+        self.orb_state = OrbState::Error;
+    }
+
+    pub fn clear_conversation(&mut self) {
+        self.conversation.clear();
+        self.awaiting_reply = false;
+        self.set_status("Conversacion borrada");
+        self.orb_state = OrbState::Idle;
+    }
+
     pub fn record_note_saved(&mut self) {
-        self.status_text = "Nota guardada en tu memoria local";
+        self.set_status("Nota guardada en tu memoria local");
         self.orb_state = OrbState::Success;
     }
 
     pub fn record_invalid_note(&mut self) {
-        self.status_text = "Escribe algo antes de guardar";
+        self.set_status("Escribe algo antes de guardar");
         self.orb_state = OrbState::Warning;
     }
 
     pub fn record_routine_accepted(&mut self) {
-        self.status_text = "Rutina activada";
+        self.set_status("Rutina activada");
         self.orb_state = OrbState::Success;
     }
 
     pub fn record_routine_dismissed(&mut self) {
-        self.status_text = "Sugerencia descartada";
+        self.set_status("Sugerencia descartada");
         self.orb_state = OrbState::Idle;
     }
 
     pub fn record_storage_error(&mut self) {
-        self.status_text = "No pudimos acceder a la memoria local";
+        self.set_status("No pudimos acceder a la memoria local");
         self.orb_state = OrbState::Error;
     }
 
     pub fn record_ai_settings_saved(&mut self) {
-        self.status_text = "Configuracion de IA guardada";
+        self.set_status("Configuracion de IA guardada");
         self.orb_state = OrbState::Success;
     }
 
-    pub fn record_ai_validation_error(&mut self, message: &'static str) {
-        self.status_text = message;
+    pub fn record_ai_validation_error(&mut self, message: &str) {
+        self.set_status(message);
         self.orb_state = OrbState::Warning;
     }
 
     pub fn record_credential_error(&mut self) {
-        self.status_text = "No pudimos acceder al almacen seguro de Windows";
+        self.set_status("No pudimos acceder al almacen seguro de Windows");
         self.orb_state = OrbState::Error;
     }
 
     /// Reports the one configuration Tom cannot work with: no key and no local model.
     pub fn record_missing_intelligence(&mut self) {
-        self.status_text = NO_INTELLIGENCE;
+        self.set_status(NO_INTELLIGENCE);
         self.orb_state = OrbState::Warning;
     }
 
     pub fn record_api_key_stored(&mut self) {
-        self.status_text = "Clave guardada en Windows";
+        self.set_status("Clave guardada en Windows");
         self.orb_state = OrbState::Success;
     }
 
     pub fn record_api_key_cleared(&mut self) {
-        self.status_text = "Clave eliminada de Windows";
+        self.set_status("Clave eliminada de Windows");
         self.orb_state = OrbState::Success;
     }
 }
@@ -585,12 +674,12 @@ impl Controller {
 #[cfg(test)]
 mod tests {
     use super::{
-        AiSettingsSubmission, ApiKeySubmission, Controller, NoteSubmission, OnboardingAdvance,
-        OnboardingAnswers, OrbResizeAction, OrbState, WindowMode, WorkspaceSection,
-        anchored_orb_position, centered_resize_position, translated_orb_position,
+        AiSettingsSubmission, ApiKeySubmission, ChatSubmission, Controller, NoteSubmission,
+        OnboardingAdvance, OnboardingAnswers, OrbResizeAction, OrbState, WindowMode,
+        WorkspaceSection, anchored_orb_position, centered_resize_position, translated_orb_position,
     };
     use tom_core::{
-        AiProvider, AiSettings, AiSetup, AssistanceStyle, OnboardingStep, Persona,
+        AiProvider, AiSettings, AiSetup, AssistanceStyle, ChatRole, OnboardingStep, Persona,
         ProfessionalProfile,
     };
 
@@ -617,11 +706,21 @@ mod tests {
 
     #[test]
     fn workspace_sections_expose_one_visible_page() {
-        assert_eq!(WorkspaceSection::Today.visibility(), (true, false, false));
-        assert_eq!(WorkspaceSection::Memory.visibility(), (false, true, false));
+        assert_eq!(
+            WorkspaceSection::Today.visibility(),
+            (true, false, false, false)
+        );
+        assert_eq!(
+            WorkspaceSection::Conversation.visibility(),
+            (false, true, false, false)
+        );
+        assert_eq!(
+            WorkspaceSection::Memory.visibility(),
+            (false, false, true, false)
+        );
         assert_eq!(
             WorkspaceSection::Routines.visibility(),
-            (false, false, true)
+            (false, false, false, true)
         );
     }
 
@@ -866,6 +965,69 @@ mod tests {
         controller.advance_onboarding();
         controller.back_onboarding();
         assert_eq!(controller.onboarding_step_index(), 0);
+    }
+
+    #[test]
+    fn a_question_must_have_content_and_arrives_trimmed() {
+        assert_eq!(
+            ChatSubmission::try_from_ui("  resume mi dia  "),
+            Ok(ChatSubmission {
+                question: "resume mi dia".to_owned()
+            })
+        );
+        assert_eq!(
+            ChatSubmission::try_from_ui("   "),
+            Err(super::EMPTY_QUESTION)
+        );
+    }
+
+    #[test]
+    fn an_exchange_keeps_the_question_on_screen_while_it_waits() {
+        let mut controller = Controller::default();
+
+        controller.begin_exchange("resume mi dia".to_owned());
+
+        assert!(controller.awaiting_reply());
+        assert_eq!(controller.orb_state(), OrbState::Thinking);
+        assert_eq!(controller.conversation().len(), 1);
+        assert_eq!(controller.conversation()[0].role, ChatRole::User);
+
+        controller.record_reply("aqui va".to_owned());
+
+        assert!(!controller.awaiting_reply());
+        assert_eq!(controller.conversation().len(), 2);
+        assert_eq!(controller.conversation()[1].role, ChatRole::Assistant);
+        assert_eq!(controller.conversation()[1].text, "aqui va");
+        assert_eq!(controller.orb_state(), OrbState::Success);
+    }
+
+    #[test]
+    fn a_failed_exchange_keeps_the_question_and_invents_no_answer() {
+        let mut controller = Controller::default();
+        controller.begin_exchange("resume mi dia".to_owned());
+
+        controller.record_inference_error("Error 429 del proveedor".to_owned());
+
+        assert!(!controller.awaiting_reply());
+        assert_eq!(
+            controller.conversation().len(),
+            1,
+            "no assistant turn is fabricated for a failure"
+        );
+        assert_eq!(controller.status_text(), "Error 429 del proveedor");
+        assert_eq!(controller.orb_state(), OrbState::Error);
+    }
+
+    #[test]
+    fn clearing_the_conversation_drops_every_turn() {
+        let mut controller = Controller::default();
+        controller.begin_exchange("uno".to_owned());
+        controller.record_reply("dos".to_owned());
+
+        controller.clear_conversation();
+
+        assert!(controller.conversation().is_empty());
+        assert!(!controller.awaiting_reply());
     }
 
     #[test]

@@ -11,6 +11,7 @@ directories = "6"
 keyring = { version = "4.1.6", default-features = false, features = ["v1", "windows-native-keyring-store"] }
 slint = "1.17"
 tom-core = { path = "../../crates/tom-core" }
+ureq = "3"
 
 [build-dependencies]
 slint-build = "1.17"

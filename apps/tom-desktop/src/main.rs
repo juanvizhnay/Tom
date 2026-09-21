@@ -2,14 +2,15 @@
 
 mod controller;
 mod credential;
+mod transport;
 mod view_model;
 
 use std::{cell::RefCell, fs, path::PathBuf, rc::Rc};
 
 use controller::{
-    AiSettingsSubmission, ApiKeySubmission, Controller, NO_INTELLIGENCE, NoteSubmission,
-    OnboardingAdvance, OnboardingAnswers, OrbResizeAction, OrbState, UNKNOWN_PERSONA,
-    UNKNOWN_PROVIDER, WindowMode, WorkspaceSection, anchored_orb_position,
+    AiSettingsSubmission, ApiKeySubmission, ChatSubmission, Controller, NO_INTELLIGENCE,
+    NoteSubmission, OnboardingAdvance, OnboardingAnswers, OrbResizeAction, OrbState,
+    UNKNOWN_PERSONA, UNKNOWN_PROVIDER, WindowMode, WorkspaceSection, anchored_orb_position,
     centered_resize_position, translated_orb_position,
 };
 use credential::{
@@ -20,7 +21,10 @@ use directories::ProjectDirs;
 use slint::{
     ComponentHandle, LogicalPosition, LogicalSize, Model, PhysicalPosition, PhysicalSize, VecModel,
 };
-use tom_core::{AiProvider, AiSettings, MemoryStore, Note, Persona};
+use tom_core::{
+    AiProvider, AiSettings, MemoryStore, Note, Persona, UserProfile, build_chat_request,
+    system_prompt,
+};
 use view_model::{api_key_rows, bind_catalog, bind_orb_bounds};
 
 slint::include_modules!();
@@ -80,6 +84,7 @@ fn main() -> Result<(), slint::PlatformError> {
     connect_note_callback(&ui, &context);
     connect_routine_callbacks(&ui, Rc::clone(&context.controller), routine_model);
     connect_ai_callbacks(&ui, &context);
+    connect_conversation_callbacks(&ui, &context);
 
     ui.run()
 }
@@ -154,11 +159,26 @@ fn sync_ui(ui: &MainWindow, controller: &Controller) {
     ui.set_section_title(section_title.into());
     ui.set_section_subtitle(section_subtitle.into());
     ui.set_routines_empty_text(controller.empty_routines_text().into());
-    let (today_visible, memory_visible, routines_visible) =
+    ui.set_awaiting_reply(controller.awaiting_reply());
+    let (today_visible, conversation_visible, memory_visible, routines_visible) =
         controller.active_section().visibility();
     ui.set_today_visible(today_visible);
+    ui.set_conversation_visible(conversation_visible);
     ui.set_memory_visible(memory_visible);
     ui.set_routines_visible(routines_visible);
+}
+
+/// Republishes the transcript the controller holds.
+fn set_chat_rows(ui: &MainWindow, controller: &Controller) {
+    let rows = controller
+        .conversation()
+        .iter()
+        .map(|turn| ChatRow {
+            role: turn.role.stable_id().into(),
+            text: turn.text.clone().into(),
+        })
+        .collect::<Vec<_>>();
+    ui.set_chat_rows(Rc::new(VecModel::from(rows)).into());
 }
 
 fn sync_orb_ui(ui: &OrbWindow, controller: &Controller) {
@@ -786,6 +806,124 @@ fn handle_save_ai_settings(
     if let Some(ui) = ui_weak.upgrade() {
         refresh_key_manager(&ui, context);
     }
+}
+
+fn connect_conversation_callbacks(ui: &MainWindow, context: &AppContext) {
+    let ui_weak = ui.as_weak();
+    let send_context = context.clone();
+    ui.on_send_message(move |question| {
+        handle_send_message(&send_context, &ui_weak, question.as_str());
+    });
+
+    let ui_weak = ui.as_weak();
+    let clear_context = context.clone();
+    ui.on_clear_conversation(move || {
+        let mut controller = clear_context.controller.borrow_mut();
+        controller.clear_conversation();
+        if let Some(ui) = ui_weak.upgrade() {
+            set_chat_rows(&ui, &controller);
+            sync_ui(&ui, &controller);
+        }
+    });
+
+    // The worker thread cannot touch the controller, so it hands its result back through
+    // this callback, which runs on the UI thread where the controller lives.
+    let ui_weak = ui.as_weak();
+    let reply_context = context.clone();
+    ui.on_reply_arrived(move |succeeded, text| {
+        let mut controller = reply_context.controller.borrow_mut();
+        if succeeded {
+            controller.record_reply(text.to_string());
+        } else {
+            controller.record_inference_error(text.to_string());
+        }
+        if let Some(ui) = ui_weak.upgrade() {
+            set_chat_rows(&ui, &controller);
+            sync_ui(&ui, &controller);
+        }
+    });
+}
+
+fn handle_send_message(context: &AppContext, ui_weak: &slint::Weak<MainWindow>, question: &str) {
+    let Some(ui) = ui_weak.upgrade() else {
+        return;
+    };
+    // One exchange at a time: a second request would race the first into the transcript.
+    if context.controller.borrow().awaiting_reply() {
+        return;
+    }
+
+    let question = match ChatSubmission::try_from_ui(question) {
+        Ok(submission) => submission.question,
+        Err(message) => {
+            let mut controller = context.controller.borrow_mut();
+            controller.record_ai_validation_error(message);
+            sync_ui(&ui, &controller);
+            return;
+        }
+    };
+
+    let settings = stored_ai_settings(context);
+    let profile = stored_profile(context);
+
+    // The credential is read here, on the UI thread, and lives only inside the request
+    // that is about to be sent.
+    let Ok(api_key) = read_provider_key(context, settings.provider) else {
+        let mut controller = context.controller.borrow_mut();
+        controller.record_credential_error();
+        sync_ui(&ui, &controller);
+        return;
+    };
+
+    let mut controller = context.controller.borrow_mut();
+    controller.begin_exchange(question);
+    let request = match build_chat_request(
+        &settings,
+        api_key.as_deref(),
+        &system_prompt(&profile),
+        controller.conversation(),
+    ) {
+        Ok(request) => request,
+        Err(error) => {
+            controller.record_inference_error(error.user_message());
+            set_chat_rows(&ui, &controller);
+            sync_ui(&ui, &controller);
+            return;
+        }
+    };
+    set_chat_rows(&ui, &controller);
+    sync_ui(&ui, &controller);
+    drop(controller);
+
+    let ui_weak = ui_weak.clone();
+    std::thread::spawn(move || {
+        let outcome = transport::send_chat(&request);
+        // If the window is gone there is nobody left to tell.
+        let _ = ui_weak.upgrade_in_event_loop(move |ui| match outcome {
+            Ok(reply) => ui.invoke_reply_arrived(true, reply.into()),
+            Err(error) => ui.invoke_reply_arrived(false, error.user_message().into()),
+        });
+    });
+}
+
+/// Reads the credential for a provider, or `Err` when the vault itself failed.
+///
+/// A provider with no stored key is `Ok(None)`: local models are reached without one, and
+/// a cloud provider's missing key is reported by the request builder with the precise
+/// reason rather than as a vault failure.
+fn read_provider_key(context: &AppContext, provider: AiProvider) -> Result<Option<String>, ()> {
+    if !provider.accepts_api_key() {
+        return Ok(None);
+    }
+    context.vault.read_key(provider.stable_id()).map_err(|_| ())
+}
+
+/// The profile the system prompt is built from, falling back to defaults before onboarding.
+fn stored_profile(context: &AppContext) -> UserProfile {
+    context
+        .store()
+        .and_then(|store| store.load_profile().ok().flatten())
+        .unwrap_or_default()
 }
 
 fn sync_weak_ui(ui_weak: &slint::Weak<MainWindow>, controller: &Controller) {

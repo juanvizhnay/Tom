@@ -13,7 +13,7 @@ Tom is an experimental desktop assistant built to make everyday work calmer and 
 Choose **Tom** for a professional tone or **Tomy** for a friendlier, more relaxed personality. Both personalities have the same capabilities and permissions.
 
 > [!IMPORTANT]
-> Tom is in early development. The desktop experience, local persistence, secure credential storage, and initial routine flow are working. Model inference, real background routine learning, and operating-system integrations are still on the roadmap.
+> Tom is in early development. The desktop experience, local persistence, secure credential storage, the initial routine flow, and chat against a configured provider are working. Real background routine learning, conversation memory, and operating-system integrations are still on the roadmap.
 
 ## What makes Tom different
 
@@ -39,6 +39,7 @@ On the first launch, Tom guides you through a five-step setup:
 The main application currently includes:
 
 - **Today** — quick note capture and an activity pulse with explainable suggestions.
+- **Hablar** — a conversation with the model you configured, in the voice and initiative level you chose.
 - **Memory** — a local view of what Tom remembers.
 - **Routines** — suggestions that can be accepted or dismissed explicitly.
 - **Settings** — personality, profession, initiative level, and provider metadata, plus a key manager that adds and removes one credential per provider.
@@ -50,6 +51,7 @@ The main application currently includes:
 | --- | --- |
 | Language | Rust 2024, Rust 1.92+ |
 | Desktop UI | Slint 1.17 |
+| Inference | `ureq` over HTTPS, one worker thread per request |
 | Local storage | SQLite through `rusqlite` |
 | Secret storage | Windows Credential Manager through `keyring` |
 | Project structure | Cargo workspace |
@@ -94,7 +96,11 @@ The **Claves guardadas** tab is the only place credentials are touched. Keys are
 
 No individual key is required. Tom needs exactly one way in: a single stored key, from any provider, or a local model it can reach. With none of either it cannot think, and it says so in the settings panel and in the status line rather than failing when a request is made.
 
-The configuration layer is implemented, but Tom does **not** send inference requests yet. Network clients and local-model execution will be added as explicit, optional capabilities so users remain in control of when data leaves their device.
+Tom sends chat requests to whichever provider you configure, over three wire formats: the OpenAI-compatible `/chat/completions` shape (OpenAI, Ollama, LM Studio, and any compatible gateway), Anthropic's Messages API, and Gemini's `generateContent`. Requests are built and parsed by pure functions in `tom-core`, so every format is covered by tests rather than discovered against a live endpoint; the only code that touches the network is `apps/tom-desktop/src/transport.rs`.
+
+Requests run on a worker thread, so the interface never blocks while a model is thinking. A credential is read from the vault only at the moment a request is built, and travels no further than that request. Endpoints and model names have per-provider defaults and are editable in settings.
+
+The conversation lives in the session only - it is not written to the local database, and closing Tom discards it.
 
 ## Privacy and security
 
@@ -129,8 +135,9 @@ The repository denies unsafe Rust and treats Clippy's `all` and `pedantic` lint 
 - [x] Secure API-key storage on Windows
 - [x] Explainable routine-suggestion flow
 - [x] Movable and resizable orb mode
-- [ ] Cloud and OpenAI-compatible inference clients
-- [ ] Local-model execution
+- [x] Cloud, OpenAI-compatible, and local inference clients
+- [ ] Streaming replies
+- [ ] Conversation history in local memory
 - [ ] Searchable, editable, and forgettable memory controls
 - [ ] Permissioned routine detection and background assistance
 - [ ] Optional productivity-tool and operating-system integrations
